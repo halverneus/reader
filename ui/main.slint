@@ -1,0 +1,393 @@
+import { Button, LineEdit, VerticalBox, HorizontalBox, ScrollView, ComboBox } from "std-widgets.slint";
+
+export struct ScriptBlock {
+    marker: int,
+    original-index: int,   // index into AppState.blocks (preserved even when HIDE items are present)
+    character: string,
+    content: string,
+    mode: string,          // "read" | "skip" | "hide"
+}
+
+export struct CharacterEntry {
+    name: string,
+    voice: string,
+    mode: string,          // "read" | "skip" | "hide"
+}
+
+export component AppWindow inherits Window {
+    title: "Reader";
+    preferred-width: 1024px;
+    preferred-height: 720px;
+    background: #1a1a28;
+
+    in-out property <[ScriptBlock]>    blocks: [];
+    in-out property <[CharacterEntry]> characters: [];
+    in-out property <[string]>         voices: [];
+    in-out property <string>           file-path: "";
+    in-out property <int>              playing-index: -1;
+    in-out property <bool>             model-ready: false;
+
+    callback open-file-dialog();
+    callback load-file(string);
+    callback block-clicked(int);          // passes original-index
+    callback advance-block();             // ↓ key
+    callback character-voice-changed(string, string);
+    callback character-mode-cycled(string);
+    callback character-prev-voice(string);
+    callback character-next-voice(string);
+    callback preview-voice(string);
+    /// Called from Rust to set scroll position.
+    callback scroll-to(length);
+
+    // Forward keyboard focus to the FocusScope on startup.
+    forward-focus: key-scope;
+
+    // ── Scroll callback (Rust → Slint) ────────────────────────────────────
+    scroll-to(offset) => {
+        script-scroll.viewport-y = -offset;
+    }
+
+    key-scope := FocusScope {
+    // ── Global key handler ────────────────────────────────────────────────
+    key-released(event) => {
+        if event.text == Key.DownArrow {
+            root.advance-block();
+            accept
+        } else {
+            reject
+        }
+    }
+
+    HorizontalLayout {
+        padding: 0px;
+        spacing: 0px;
+
+        // ════════════════════════════════════════════════════════════════
+        // LEFT — script view
+        // ════════════════════════════════════════════════════════════════
+        VerticalLayout {
+            padding: 12px;
+            spacing: 8px;
+
+            // ── Top bar ───────────────────────────────────────────────
+            HorizontalLayout {
+                spacing: 8px;
+                height: 36px;
+
+                LineEdit {
+                    text <=> root.file-path;
+                    placeholder-text: "Script file path…";
+                    accepted(text) => { root.load-file(text); }
+                }
+                Button {
+                    text: "Browse…";
+                    width: 90px;
+                    clicked => { root.open-file-dialog(); }
+                }
+                Button {
+                    text: "Load";
+                    width: 60px;
+                    clicked => { root.load-file(root.file-path); }
+                }
+
+                // ── Kokoro readiness indicator ─────────────────────────
+                HorizontalLayout {
+                    width: 72px;
+                    spacing: 6px;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 9px;
+                        height: 9px;
+                        border-radius: 4.5px;
+                        background: root.model-ready ? #50d090 : #e05838;
+                        animate background { duration: 400ms; }
+                    }
+
+                    Text {
+                        text: root.model-ready ? "TTS" : "loading…";
+                        color: root.model-ready ? #3aaa70 : #905040;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                        animate color { duration: 400ms; }
+                    }
+                }
+            }
+
+            // ── Status ────────────────────────────────────────────────
+            Text {
+                height: 16px;
+                text: root.blocks.length == 0
+                    ? "No script loaded — browse or type a path above."
+                    : root.blocks.length + " blocks  ·  click a block or press ↓ to speak";
+                color: #555;
+                font-size: 11px;
+            }
+
+            // ── Block list ────────────────────────────────────────────
+            script-scroll := ScrollView {
+                // No binding on viewport-y — the scroll-to() callback sets it
+                // imperatively so that manual user scroll doesn't break things.
+                animate viewport-y { duration: 380ms; easing: ease-in-out; }
+
+                VerticalLayout {
+                    spacing: 4px;
+
+                    for block[i] in root.blocks: item-touch := TouchArea {
+                        // HIDE blocks take no space and receive no events.
+                        visible: block.mode != "hide";
+                        height: block.mode == "hide" ? 0px : 100px;
+                        enabled: block.mode != "hide";
+
+                        clicked => { root.block-clicked(block.original-index); }
+
+                        Rectangle {
+                            border-radius: 6px;
+                            // SKIP blocks get a warm amber border so they stand out.
+                            border-width: block.mode == "skip" ? 1.5px : 0px;
+                            border-color: #b07828;
+
+                            background:
+                                block.mode == "hide"  ? transparent :
+                                root.playing-index == block.original-index ? #2c4880 :
+                                block.mode == "skip"  ? (item-touch.has-hover ? #332508 : #2a1f06) :
+                                item-touch.has-hover  ? #262636 : #222232;
+
+                            HorizontalLayout {
+                                padding: 10px;
+                                spacing: 8px;
+
+                                // Playback dot
+                                Rectangle {
+                                    width: 8px;
+                                    height: 8px;
+                                    y: 8px;
+                                    border-radius: 4px;
+                                    background:
+                                        root.playing-index == block.original-index ? #5de8a8 :
+                                        block.mode == "skip" ? #c08830 : #2e2e42;
+                                }
+
+                                VerticalLayout {
+                                    spacing: 4px;
+
+                                    // Header row
+                                    HorizontalLayout {
+                                        height: 16px;
+                                        spacing: 8px;
+                                        alignment: start;
+
+                                        Text {
+                                            text: "*" + block.marker + "*";
+                                            color: block.mode == "skip" ? #806020 : #3a3a52;
+                                            font-size: 10px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        if block.character != "": Text {
+                                            text: block.character;
+                                            color: block.mode == "skip" ? #e8a030 : #7aaeff;
+                                            font-size: 11px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+
+                                        if block.mode == "skip": Text {
+                                            text: "· YOUR LINE";
+                                            color: #e8a030;
+                                            font-size: 10px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    // Content
+                                    Text {
+                                        vertical-stretch: 1;
+                                        text: block.content;
+                                        color: block.mode == "skip" ? #f0dfa0 : #cccce0;
+                                        font-size: 14px;
+                                        wrap: word-wrap;
+                                        overflow: elide;
+                                        vertical-alignment: top;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Spacer — ensures the last block can scroll all the way to the top.
+                    Rectangle {
+                        height: root.height;
+                        background: transparent;
+                    }
+                }
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // RIGHT — sidebar
+        // ════════════════════════════════════════════════════════════════
+        Rectangle {
+            width: 240px;
+            background: #12121e;
+
+            ScrollView {
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 18px;
+                    alignment: start;
+
+                    Text {
+                        text: "CHARACTERS";
+                        color: #3a3a52;
+                        font-size: 10px;
+                        font-weight: 700;
+                        letter-spacing: 1.5px;
+                    }
+
+                    if root.characters.length == 0: Text {
+                        text: "Load a script to see\ncharacters here.";
+                        color: #2e2e42;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    for ch in root.characters: VerticalLayout {
+                        spacing: 5px;
+
+                        // Name + mode toggle
+                        HorizontalLayout {
+                            spacing: 6px;
+                            height: 26px;
+
+                            Text {
+                                text: ch.name;
+                                color:
+                                    ch.mode == "hide" ? #2e2e42 :
+                                    ch.mode == "skip" ? #c08020 : #a0c0ff;
+                                font-size: 12px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+
+                            // Cycle button: READ → SKIP → HIDE → READ
+                            mode-touch := TouchArea {
+                                width: 52px;
+                                height: 22px;
+                                clicked => { root.character-mode-cycled(ch.name); }
+
+                                Rectangle {
+                                    border-radius: 4px;
+                                    background:
+                                        ch.mode == "read" ? #0e2e1e :
+                                        ch.mode == "skip" ? #2e2010 : #2a1020;
+                                    border-width: 1px;
+                                    border-color:
+                                        ch.mode == "read" ? #2a7050 :
+                                        ch.mode == "skip" ? #7a5020 : #6a2040;
+
+                                    Text {
+                                        text:
+                                            ch.mode == "read" ? "READ" :
+                                            ch.mode == "skip" ? "SKIP" : "HIDE";
+                                        color:
+                                            ch.mode == "read" ? #50d090 :
+                                            ch.mode == "skip" ? #d09040 : #d04060;
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Voice row: ◀ [ComboBox] ▶
+                        HorizontalLayout {
+                            spacing: 3px;
+                            height: 28px;
+
+                            prev-touch := TouchArea {
+                                width: 22px;
+                                enabled: ch.mode != "hide";
+                                clicked => { root.character-prev-voice(ch.name); }
+
+                                Rectangle {
+                                    border-radius: 4px;
+                                    background: prev-touch.has-hover ? #252538 : #1a1a2a;
+                                    border-width: 1px;
+                                    border-color: #2a2a40;
+
+                                    Text {
+                                        text: "◀";
+                                        font-size: 10px;
+                                        color: ch.mode == "hide" ? #2e2e42 : #7090c0;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            ComboBox {
+                                horizontal-stretch: 1;
+                                enabled: ch.mode != "hide";
+                                model: root.voices;
+                                current-value: ch.voice;
+                                selected(value) => {
+                                    root.character-voice-changed(ch.name, value);
+                                }
+                            }
+
+                            next-touch := TouchArea {
+                                width: 22px;
+                                enabled: ch.mode != "hide";
+                                clicked => { root.character-next-voice(ch.name); }
+
+                                Rectangle {
+                                    border-radius: 4px;
+                                    background: next-touch.has-hover ? #252538 : #1a1a2a;
+                                    border-width: 1px;
+                                    border-color: #2a2a40;
+
+                                    Text {
+                                        text: "▶";
+                                        font-size: 10px;
+                                        color: ch.mode == "hide" ? #2e2e42 : #7090c0;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Preview button
+                        preview-touch := TouchArea {
+                            height: 20px;
+                            enabled: ch.mode != "hide";
+                            clicked => { root.preview-voice(ch.name); }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: preview-touch.has-hover ? #1a2e1a : #121e12;
+                                border-width: 1px;
+                                border-color: ch.mode == "hide" ? #1a1a28 : #2a5030;
+
+                                Text {
+                                    text: "▶ PREVIEW";
+                                    color: ch.mode == "hide" ? #2e2e42 : #40a060;
+                                    font-size: 9px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    } // FocusScope
+}
