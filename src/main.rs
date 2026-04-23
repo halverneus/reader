@@ -14,73 +14,21 @@ use std::sync::{
 
 slint::include_modules!();
 
-// ── Voice list ────────────────────────────────────────────────────────────────
 const VOICES: &[&str] = &[
-    // American English — female
-    "af_alloy",
-    "af_aoede",
-    "af_bella",
-    "af_heart",
-    "af_jessica",
-    "af_kore",
-    "af_nicole",
-    "af_nova",
-    "af_river",
-    "af_sarah",
-    "af_sky",
-    // American English — male
-    "am_adam",
-    "am_echo",
-    "am_eric",
-    "am_fenrir",
-    "am_liam",
-    "am_michael",
-    "am_onyx",
-    "am_puck",
-    "am_santa",
-    // British English — female
-    "bf_alice",
-    "bf_emma",
-    "bf_isabella",
-    "bf_lily",
-    // British English — male
-    "bm_daniel",
-    "bm_fable",
-    "bm_george",
-    "bm_lewis",
-    // // Japanese
-    // "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo",
-    // // Mandarin
-    // "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
-    // "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
-    // // Spanish
-    // "ef_dora", "em_alex", "em_santa",
-    // // French
-    // "ff_siwis",
-    // // Hindi
-    // "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
-    // // Italian
-    // "if_sara", "im_nicola",
-    // // Portuguese
-    // "pf_dora", "pm_alex", "pm_santa",
+    "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore",
+    "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
+    "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael",
+    "am_onyx", "am_puck", "am_santa",
+    "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+    "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
 ];
 
 const DEFAULT_VOICE: &str = "af_bella";
-/// Gap between block items in the VerticalLayout (matches `spacing: 4px` in Slint).
-const ITEM_GAP: f32 = 4.0;
-/// Fixed overhead per block: top+bottom padding (20 px) + header row (16 px) + gap (4 px).
 const BLOCK_OVERHEAD: f32 = 40.0;
-/// Rendered line-height at 14 px font with ~1.2× leading (Slint default).
 const LINE_HEIGHT: f32 = 18.0;
-/// Estimated characters that fit on one display line in the script column.
-/// Column ≈ 1024 px window − 240 px sidebar − 24 px outer pad − 36 px inner (pad+dot+gap)
-/// = ~724 px; at ~8 px/char average for 14 px font → ~90 chars.
 const CHARS_PER_LINE: usize = 90;
-
 const PREVIEW_TEXT: &str =
     "Hello, this is a preview. Testing one two three. How does this voice sound to you?";
-
-// ── Character mode ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum CharacterMode {
@@ -115,13 +63,19 @@ impl CharacterMode {
     }
 }
 
-// ── App state ─────────────────────────────────────────────────────────────────
-
 #[derive(Clone)]
 struct CharacterConfig {
     name: String,
     voice: String,
     mode: CharacterMode,
+}
+
+struct ProdData {
+    top: Vec<ScriptBlock>,
+    current_block: ScriptBlock,
+    has_current: bool,
+    bottom: Vec<ScriptBlock>,
+    status: String,
 }
 
 struct AppState {
@@ -130,10 +84,10 @@ struct AppState {
     last_dir: Option<PathBuf>,
     voice_assignments: HashMap<String, String>,
     character_modes: HashMap<String, String>,
-    /// Block index currently shown at the top of the view (-1 = none yet).
     current_top_index: i32,
-    /// Set to true to cancel the running TTS task.
     cancel: Arc<AtomicBool>,
+    production_mode: bool,
+    prod_position: i32,
 }
 
 impl AppState {
@@ -147,6 +101,8 @@ impl AppState {
             character_modes: cfg.character_modes,
             current_top_index: -1,
             cancel: Arc::new(AtomicBool::new(false)),
+            production_mode: false,
+            prod_position: -1,
         }
     }
 
@@ -173,7 +129,6 @@ impl AppState {
                     .character_modes
                     .get(name)
                     .map(|s| CharacterMode::from_str(s))
-                    // Auto-hide a character literally named "IGNORE".
                     .unwrap_or_else(|| {
                         if name.eq_ignore_ascii_case("IGNORE") {
                             CharacterMode::Hide
@@ -182,26 +137,19 @@ impl AppState {
                         }
                     });
 
-                CharacterConfig {
-                    name: name.clone(),
-                    voice,
-                    mode,
-                }
+                CharacterConfig { name: name.clone(), voice, mode }
             })
             .collect();
 
-        // First non-hidden block becomes the starting position.
         self.current_top_index = self.next_non_hidden(0).map(|i| i as i32).unwrap_or(-1);
+        self.prod_position = -1;
         self.save_config();
         Ok(())
     }
 
     fn save_config(&self) {
         let cfg = config::Config {
-            last_dir: self
-                .last_dir
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned()),
+            last_dir: self.last_dir.as_ref().map(|p| p.to_string_lossy().into_owned()),
             voice_assignments: self.voice_assignments.clone(),
             character_modes: self
                 .characters
@@ -216,8 +164,7 @@ impl AppState {
         if let Some(c) = self.characters.iter_mut().find(|c| c.name == name) {
             c.voice = voice.to_string();
         }
-        self.voice_assignments
-            .insert(name.to_string(), voice.to_string());
+        self.voice_assignments.insert(name.to_string(), voice.to_string());
         self.save_config();
     }
 
@@ -227,8 +174,6 @@ impl AppState {
         }
         self.save_config();
     }
-
-    // ── Voice cycling ─────────────────────────────────────────────────────
 
     fn voice_index_for(&self, name: &str) -> usize {
         self.characters
@@ -252,8 +197,7 @@ impl AppState {
 
     fn next_voice(&mut self, name: &str) -> String {
         let idx = self.voice_index_for(name);
-        let new_idx = (idx + 1) % VOICES.len();
-        self.cycle_to_voice_index(name, new_idx)
+        self.cycle_to_voice_index(name, (idx + 1) % VOICES.len())
     }
 
     fn current_voice_for(&self, name: &str) -> String {
@@ -263,8 +207,6 @@ impl AppState {
             .map(|c| c.voice.clone())
             .unwrap_or_else(|| DEFAULT_VOICE.to_string())
     }
-
-    // ── Block queries ─────────────────────────────────────────────────────
 
     fn char_for_block(&self, index: usize) -> Option<&CharacterConfig> {
         let block = self.blocks.get(index)?;
@@ -283,15 +225,10 @@ impl AppState {
             .unwrap_or_else(|| DEFAULT_VOICE.to_string())
     }
 
-    /// First block at `from` or later where mode != Hide.
     fn next_non_hidden(&self, from: usize) -> Option<usize> {
         (from..self.blocks.len()).find(|&i| self.block_mode(i) != CharacterMode::Hide)
     }
 
-    /// Estimate the rendered height of a single block from its text content.
-    ///
-    /// Each source line is divided by CHARS_PER_LINE to account for word-wrap,
-    /// then multiplied by LINE_HEIGHT.  BLOCK_OVERHEAD covers padding + header.
     fn estimated_height(&self, block_index: usize) -> f32 {
         let Some(block) = self.blocks.get(block_index) else {
             return LINE_HEIGHT + BLOCK_OVERHEAD;
@@ -299,46 +236,45 @@ impl AppState {
         let display_lines: usize = block
             .content
             .lines()
-            .map(|l| {
-                if l.is_empty() {
-                    1
-                } else {
-                    (l.len() + CHARS_PER_LINE - 1) / CHARS_PER_LINE
-                }
-            })
+            .map(|l| if l.is_empty() { 1 } else { (l.len() + CHARS_PER_LINE - 1) / CHARS_PER_LINE })
             .sum::<usize>()
             .max(1);
         BLOCK_OVERHEAD + display_lines as f32 * LINE_HEIGHT
     }
 
-    /// Pixel scroll offset for `block_index`.
-    ///
-    /// Sums estimated heights of all non-hidden blocks before `block_index`,
-    /// plus the 4 px gap between items.
-    fn pixel_offset(&self, block_index: usize) -> f32 {
-        (0..block_index)
-            .filter(|&i| self.block_mode(i) != CharacterMode::Hide)
-            .map(|i| self.estimated_height(i) + ITEM_GAP)
-            .sum()
+    fn max_block_height(&self) -> f32 {
+        self.blocks
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.block_mode(*i) != CharacterMode::Hide)
+            .map(|(i, _)| self.estimated_height(i))
+            .fold(80.0f32, f32::max)
+            + 20.0
     }
 
-    // ── Slint model builders ──────────────────────────────────────────────
+    fn visible_blocks(&self) -> Vec<usize> {
+        (0..self.blocks.len())
+            .filter(|&i| self.block_mode(i) != CharacterMode::Hide)
+            .collect()
+    }
 
-    /// Returns only non-hidden blocks. Hidden blocks are excluded from the model
-    /// entirely so the Slint for loop never needs a `height: 0` condition (which
-    /// causes a preferred-height ↔ height binding cycle in Slint's layout engine).
+    fn make_slint_block(&self, block_idx: usize) -> ScriptBlock {
+        let b = &self.blocks[block_idx];
+        ScriptBlock {
+            marker: b.marker as i32,
+            original_index: block_idx as i32,
+            character: SharedString::from(b.character.as_str()),
+            content: SharedString::from(b.content.as_str()),
+            mode: SharedString::from(self.block_mode(block_idx).as_str()),
+        }
+    }
+
     fn slint_blocks(&self) -> Vec<ScriptBlock> {
         self.blocks
             .iter()
             .enumerate()
             .filter(|(i, _)| self.block_mode(*i) != CharacterMode::Hide)
-            .map(|(i, b)| ScriptBlock {
-                marker: b.marker as i32,
-                original_index: i as i32,
-                character: SharedString::from(b.character.as_str()),
-                content: SharedString::from(b.content.as_str()),
-                mode: SharedString::from(self.block_mode(i).as_str()),
-            })
+            .map(|(i, _)| self.make_slint_block(i))
             .collect()
     }
 
@@ -352,9 +288,42 @@ impl AppState {
             })
             .collect()
     }
+
+    fn prod_data(&self) -> ProdData {
+        let visible = self.visible_blocks();
+        let total = visible.len();
+
+        let cur_pos = if self.prod_position < 0 {
+            None
+        } else {
+            visible.iter().position(|&i| i == self.prod_position as usize)
+        };
+
+        match cur_pos {
+            None => ProdData {
+                top: vec![],
+                current_block: ScriptBlock::default(),
+                has_current: false,
+                bottom: visible.iter().map(|&i| self.make_slint_block(i)).collect(),
+                status: format!("0 / {total}"),
+            },
+            Some(cur) => {
+                let top = visible[..cur].iter().map(|&i| self.make_slint_block(i)).collect();
+                let current_block = self.make_slint_block(visible[cur]);
+                let bottom = visible[cur + 1..].iter().map(|&i| self.make_slint_block(i)).collect();
+                ProdData {
+                    top,
+                    current_block,
+                    has_current: true,
+                    bottom,
+                    status: format!("{} / {total}", cur + 1),
+                }
+            }
+        }
+    }
 }
 
-// ── TTS task spawn ────────────────────────────────────────────────────────────
+// ── TTS helpers ───────────────────────────────────────────────────────────────
 
 fn spawn_tts(
     block_index: usize,
@@ -362,60 +331,36 @@ fn spawn_tts(
     ui_weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
 ) {
-    let (content, voice, cancel, scroll_offset) = {
+    let (content, voice, cancel) = {
         let mut s = state.lock().unwrap();
         s.cancel.store(true, Ordering::SeqCst);
         let cancel = Arc::new(AtomicBool::new(false));
         s.cancel = cancel.clone();
-        s.current_top_index = block_index as i32;
+        if !s.production_mode {
+            s.current_top_index = block_index as i32;
+        }
         let content = s.blocks[block_index].content.clone();
         let voice = s.voice_for_block(block_index);
-        let scroll_offset = s.pixel_offset(block_index);
-        (content, voice, cancel, scroll_offset)
+        (content, voice, cancel)
     };
 
     if let Some(ui) = ui_weak.upgrade() {
         ui.set_playing_index(block_index as i32);
-        ui.invoke_scroll_to(scroll_offset);
     }
 
     handle.spawn(async move {
         if let Err(e) = tts::speak(content, voice, cancel).await {
             eprintln!("TTS error: {e}");
         }
-
-        let (_next, next_offset) = {
-            let mut s = state.lock().unwrap();
-            let next = s.next_non_hidden(block_index + 1);
-            // If the auto-scrolled-to block is a SKIP block it will already be
-            // visible at the top when the user reaches for ↓.  Pre-advance
-            // current_top_index past it so one keypress plays the next READ
-            // block rather than silently "re-showing" the SKIP block.
-            s.current_top_index = match next {
-                None => -1,
-                Some(n) if s.block_mode(n) == CharacterMode::Skip => {
-                    s.next_non_hidden(n + 1).unwrap_or(n) as i32
-                }
-                Some(n) => n as i32,
-            };
-            let next_offset = next.map(|i| s.pixel_offset(i));
-            (next, next_offset)
-        };
-
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 if ui.get_playing_index() == block_index as i32 {
                     ui.set_playing_index(-1);
-                    if let Some(offset) = next_offset {
-                        ui.invoke_scroll_to(offset);
-                    }
                 }
             }
         });
     });
 }
-
-// ── Voice preview spawn ───────────────────────────────────────────────────────
 
 fn spawn_preview(voice: String, state: Arc<Mutex<AppState>>, handle: tokio::runtime::Handle) {
     let cancel = {
@@ -432,10 +377,103 @@ fn spawn_preview(voice: String, state: Arc<Mutex<AppState>>, handle: tokio::runt
     });
 }
 
+// ── Production mode advance ───────────────────────────────────────────────────
+
+fn advance_production(
+    state: Arc<Mutex<AppState>>,
+    ui_weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+) {
+    let (block_index, mode, data) = {
+        let mut s = state.lock().unwrap();
+        s.cancel.store(true, Ordering::SeqCst);
+
+        let visible = s.visible_blocks();
+        if visible.is_empty() {
+            return;
+        }
+
+        let next_idx = if s.prod_position < 0 {
+            visible[0]
+        } else {
+            match visible.iter().position(|&i| i == s.prod_position as usize) {
+                Some(p) if p + 1 < visible.len() => visible[p + 1],
+                _ => return,
+            }
+        };
+
+        s.prod_position = next_idx as i32;
+        let mode = s.block_mode(next_idx);
+        let data = s.prod_data();
+        (next_idx, mode, data)
+    };
+
+    if let Some(ui) = ui_weak.upgrade() {
+        ui.set_playing_index(-1);
+        ui.set_prod_top_blocks(ModelRc::new(VecModel::from(data.top)));
+        ui.set_prod_current_block(data.current_block);
+        ui.set_prod_has_current(data.has_current);
+        ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(data.bottom)));
+        ui.set_prod_status(SharedString::from(data.status));
+        ui.invoke_scroll_past_to_bottom();
+    }
+
+    if mode == CharacterMode::Read {
+        spawn_tts(block_index, state, ui_weak, handle);
+    }
+}
+
+// ── Browse mode advance ───────────────────────────────────────────────────────
+
+fn advance_browse(
+    state: Arc<Mutex<AppState>>,
+    ui_weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+) {
+    let playing = ui_weak
+        .upgrade()
+        .map(|ui| ui.get_playing_index())
+        .unwrap_or(-1);
+
+    let target: usize = if playing >= 0 {
+        state.lock().unwrap().cancel.store(true, Ordering::SeqCst);
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.set_playing_index(-1);
+        }
+        let next = state.lock().unwrap().next_non_hidden(playing as usize + 1);
+        let Some(t) = next else { return };
+        t
+    } else {
+        let cur = state.lock().unwrap().current_top_index;
+        if cur < 0 {
+            let first = state.lock().unwrap().next_non_hidden(0);
+            let Some(t) = first else { return };
+            t
+        } else {
+            cur as usize
+        }
+    };
+
+    let mode = state.lock().unwrap().block_mode(target);
+
+    match mode {
+        CharacterMode::Read => {
+            spawn_tts(target, state, ui_weak, handle);
+        }
+        CharacterMode::Skip => {
+            let mut s = state.lock().unwrap();
+            let next = s.next_non_hidden(target + 1);
+            s.current_top_index = next.map(|i| i as i32).unwrap_or(target as i32);
+        }
+        CharacterMode::Hide => {
+            let mut s = state.lock().unwrap();
+            let next = s.next_non_hidden(target + 1);
+            s.current_top_index = next.map(|i| i as i32).unwrap_or(-1);
+        }
+    }
+}
+
 // ── Kokoro readiness poller ───────────────────────────────────────────────────
-//
-// Polls GET /health every 2 s until the model is up, then sets model-ready on
-// the UI.  The health endpoint returns 200 only after the model is loaded.
 
 async fn wait_for_kokoro(ui_weak: slint::Weak<AppWindow>) {
     let client = reqwest::Client::builder()
@@ -469,15 +507,10 @@ async fn main() -> Result<()> {
     let state = Arc::new(Mutex::new(AppState::new()));
     let handle = tokio::runtime::Handle::current();
 
-    // Start polling for Kokoro readiness in the background.
     handle.spawn(wait_for_kokoro(ui.as_weak()));
 
-    // Populate the voice list (static for the session).
     ui.set_voices(ModelRc::new(VecModel::from(
-        VOICES
-            .iter()
-            .map(|&v| SharedString::from(v))
-            .collect::<Vec<_>>(),
+        VOICES.iter().map(|&v| SharedString::from(v)).collect::<Vec<_>>(),
     )));
 
     // ── open-file-dialog ──────────────────────────────────────────────────
@@ -518,21 +551,28 @@ async fn main() -> Result<()> {
                 let mut s = state.lock().unwrap();
                 match s.load_script(path.as_str()) {
                     Ok(()) => {
-                        let top = s.current_top_index.max(0) as usize;
-                        let first_offset = s.pixel_offset(top);
-                        Ok((s.slint_blocks(), s.slint_characters(), first_offset))
+                        let slint_blocks = s.slint_blocks();
+                        let slint_chars = s.slint_characters();
+                        let max_h = s.max_block_height();
+                        let prod = s.prod_data();
+                        Ok((slint_blocks, slint_chars, max_h, prod))
                     }
                     Err(e) => Err(format!("Failed to load '{path}': {e}")),
                 }
             };
 
             match result {
-                Ok((slint_blocks, slint_chars, first_offset)) => {
+                Ok((slint_blocks, slint_chars, max_h, prod)) => {
                     if let Some(ui) = ui_weak.upgrade() {
                         ui.set_blocks(ModelRc::new(VecModel::from(slint_blocks)));
                         ui.set_characters(ModelRc::new(VecModel::from(slint_chars)));
                         ui.set_playing_index(-1);
-                        ui.invoke_scroll_to(first_offset);
+                        ui.set_max_block_height(max_h);
+                        ui.set_prod_top_blocks(ModelRc::new(VecModel::from(prod.top)));
+                        ui.set_prod_current_block(prod.current_block);
+                        ui.set_prod_has_current(prod.has_current);
+                        ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(prod.bottom)));
+                        ui.set_prod_status(SharedString::from(prod.status));
                     }
                 }
                 Err(e) => eprintln!("{e}"),
@@ -540,7 +580,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    // ── block-clicked ─────────────────────────────────────────────────────
+    // ── block-clicked (browse mode only) ──────────────────────────────────
     ui.on_block_clicked({
         let ui_weak = ui.as_weak();
         let state = state.clone();
@@ -548,83 +588,115 @@ async fn main() -> Result<()> {
         move |original_index| {
             let idx = original_index as usize;
             let mode = state.lock().unwrap().block_mode(idx);
-
             match mode {
                 CharacterMode::Read => {
                     spawn_tts(idx, state.clone(), ui_weak.clone(), handle.clone());
                 }
                 CharacterMode::Skip => {
-                    let offset = {
-                        let mut s = state.lock().unwrap();
-                        s.current_top_index = idx as i32;
-                        s.pixel_offset(idx)
-                    };
-                    if let Some(ui) = ui_weak.upgrade() {
-                        ui.invoke_scroll_to(offset);
-                    }
+                    state.lock().unwrap().current_top_index = idx as i32;
                 }
                 CharacterMode::Hide => {}
             }
         }
     });
 
-    // ── advance-block (↓ key) ─────────────────────────────────────────────
+    // ── advance-block ─────────────────────────────────────────────────────
     ui.on_advance_block({
         let ui_weak = ui.as_weak();
         let state = state.clone();
         let handle = handle.clone();
         move || {
-            let playing = ui_weak
-                .upgrade()
-                .map(|ui| ui.get_playing_index())
-                .unwrap_or(-1);
-
-            // Which block do we act on next?
-            let target: usize = if playing >= 0 {
-                // TTS is running — cancel it and move to the next non-hidden block.
-                state.lock().unwrap().cancel.store(true, Ordering::SeqCst);
-                if let Some(ui) = ui_weak.upgrade() {
-                    ui.set_playing_index(-1);
-                }
-                let next = state.lock().unwrap().next_non_hidden(playing as usize + 1);
-                let Some(t) = next else { return };
-                t
+            let production = state.lock().unwrap().production_mode;
+            if production {
+                advance_production(state.clone(), ui_weak.clone(), handle.clone());
             } else {
-                let cur = state.lock().unwrap().current_top_index;
-                if cur < 0 {
-                    let first = state.lock().unwrap().next_non_hidden(0);
-                    let Some(t) = first else { return };
-                    t
-                } else {
-                    cur as usize
+                advance_browse(state.clone(), ui_weak.clone(), handle.clone());
+            }
+        }
+    });
+
+    // ── toggle-mode ───────────────────────────────────────────────────────
+    ui.on_toggle_mode({
+        let ui_weak = ui.as_weak();
+        let state = state.clone();
+        move || {
+            let (prod_mode, data) = {
+                let mut s = state.lock().unwrap();
+                s.cancel.store(true, Ordering::SeqCst);
+                s.production_mode = !s.production_mode;
+                if s.production_mode {
+                    s.prod_position = -1;
                 }
+                (s.production_mode, s.prod_data())
+            };
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_playing_index(-1);
+                ui.set_production_mode(prod_mode);
+                ui.set_prod_top_blocks(ModelRc::new(VecModel::from(data.top)));
+                ui.set_prod_current_block(data.current_block);
+                ui.set_prod_has_current(data.has_current);
+                ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(data.bottom)));
+                ui.set_prod_status(SharedString::from(data.status));
+            }
+        }
+    });
+
+    // ── reset-production ──────────────────────────────────────────────────
+    ui.on_reset_production({
+        let ui_weak = ui.as_weak();
+        let state = state.clone();
+        move || {
+            let data = {
+                let mut s = state.lock().unwrap();
+                s.cancel.store(true, Ordering::SeqCst);
+                s.prod_position = -1;
+                s.prod_data()
+            };
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_playing_index(-1);
+                ui.set_prod_top_blocks(ModelRc::new(VecModel::from(data.top)));
+                ui.set_prod_current_block(data.current_block);
+                ui.set_prod_has_current(data.has_current);
+                ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(data.bottom)));
+                ui.set_prod_status(SharedString::from(data.status));
+            }
+        }
+    });
+
+    // ── jump-to-index ─────────────────────────────────────────────────────
+    ui.on_jump_to_index({
+        let ui_weak = ui.as_weak();
+        let state = state.clone();
+        let handle = handle.clone();
+        move |text| {
+            let n: usize = match text.trim().parse::<usize>() {
+                Ok(v) if v >= 1 => v - 1,
+                _ => return,
             };
 
-            let mode = state.lock().unwrap().block_mode(target);
+            let (block_index, mode, data) = {
+                let mut s = state.lock().unwrap();
+                s.cancel.store(true, Ordering::SeqCst);
+                let visible = s.visible_blocks();
+                let Some(&block_idx) = visible.get(n) else { return };
+                s.prod_position = block_idx as i32;
+                let mode = s.block_mode(block_idx);
+                let data = s.prod_data();
+                (block_idx, mode, data)
+            };
 
-            match mode {
-                CharacterMode::Read => {
-                    spawn_tts(target, state.clone(), ui_weak.clone(), handle.clone());
-                }
-                CharacterMode::Skip => {
-                    // Scroll the SKIP block to the top so the user can read their
-                    // own line.  Advance current_top_index to the next non-hidden
-                    // block so the next ↓ press continues from there.
-                    let target_offset = {
-                        let mut s = state.lock().unwrap();
-                        let next = s.next_non_hidden(target + 1);
-                        s.current_top_index = next.map(|i| i as i32).unwrap_or(target as i32);
-                        s.pixel_offset(target)
-                    };
-                    if let Some(ui) = ui_weak.upgrade() {
-                        ui.invoke_scroll_to(target_offset);
-                    }
-                }
-                CharacterMode::Hide => {
-                    let mut s = state.lock().unwrap();
-                    let next = s.next_non_hidden(target + 1);
-                    s.current_top_index = next.map(|i| i as i32).unwrap_or(-1);
-                }
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_playing_index(-1);
+                ui.set_prod_top_blocks(ModelRc::new(VecModel::from(data.top)));
+                ui.set_prod_current_block(data.current_block);
+                ui.set_prod_has_current(data.has_current);
+                ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(data.bottom)));
+                ui.set_prod_status(SharedString::from(data.status));
+                ui.invoke_scroll_past_to_bottom();
+            }
+
+            if mode == CharacterMode::Read {
+                spawn_tts(block_index, state.clone(), ui_weak.clone(), handle.clone());
             }
         }
     });
@@ -650,14 +722,27 @@ async fn main() -> Result<()> {
         let ui_weak = ui.as_weak();
         let state = state.clone();
         move |name| {
-            let (slint_blocks, slint_chars) = {
+            let (slint_blocks, slint_chars, max_h, prod) = {
                 let mut s = state.lock().unwrap();
                 s.cycle_character_mode(name.as_str());
-                (s.slint_blocks(), s.slint_characters())
+                // Clamp prod_position if it now refers to a hidden block.
+                if s.prod_position >= 0 {
+                    let idx = s.prod_position as usize;
+                    if s.block_mode(idx) == CharacterMode::Hide {
+                        s.prod_position = -1;
+                    }
+                }
+                (s.slint_blocks(), s.slint_characters(), s.max_block_height(), s.prod_data())
             };
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_blocks(ModelRc::new(VecModel::from(slint_blocks)));
                 ui.set_characters(ModelRc::new(VecModel::from(slint_chars)));
+                ui.set_max_block_height(max_h);
+                ui.set_prod_top_blocks(ModelRc::new(VecModel::from(prod.top)));
+                ui.set_prod_current_block(prod.current_block);
+                ui.set_prod_has_current(prod.has_current);
+                ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(prod.bottom)));
+                ui.set_prod_status(SharedString::from(prod.status));
             }
         }
     });
@@ -708,7 +793,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    // ── Run ──────────────────────────────────────────────────────────────
     ui.run()?;
     docker::stop();
     Ok(())
