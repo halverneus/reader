@@ -133,12 +133,11 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     spacing: 4px;
 
+                    // Hidden blocks are filtered out of the model in Rust, so this
+                    // loop only ever sees "read" and "skip" blocks.  No height
+                    // binding is needed — VerticalLayout auto-sizes each item to its
+                    // preferred-height, avoiding the binding-cycle recursion entirely.
                     for block[i] in root.blocks: item-touch := TouchArea {
-                        // HIDE blocks take no space and receive no events.
-                        visible: block.mode != "hide";
-                        height: block.mode == "hide" ? 0px : 100px;
-                        enabled: block.mode != "hide";
-
                         clicked => { root.block-clicked(block.original-index); }
 
                         Rectangle {
@@ -148,7 +147,6 @@ export component AppWindow inherits Window {
                             border-color: #b07828;
 
                             background:
-                                block.mode == "hide"  ? transparent :
                                 root.playing-index == block.original-index ? #2c4880 :
                                 block.mode == "skip"  ? (item-touch.has-hover ? #332508 : #2a1f06) :
                                 item-touch.has-hover  ? #262636 : #222232;
@@ -203,12 +201,10 @@ export component AppWindow inherits Window {
 
                                     // Content
                                     Text {
-                                        vertical-stretch: 1;
                                         text: block.content;
                                         color: block.mode == "skip" ? #f0dfa0 : #cccce0;
                                         font-size: 14px;
                                         wrap: word-wrap;
-                                        overflow: elide;
                                         vertical-alignment: top;
                                     }
                                 }

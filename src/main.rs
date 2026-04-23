@@ -17,35 +17,65 @@ slint::include_modules!();
 // ── Voice list ────────────────────────────────────────────────────────────────
 const VOICES: &[&str] = &[
     // American English — female
-    "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica",
-    "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
+    "af_alloy",
+    "af_aoede",
+    "af_bella",
+    "af_heart",
+    "af_jessica",
+    "af_kore",
+    "af_nicole",
+    "af_nova",
+    "af_river",
+    "af_sarah",
+    "af_sky",
     // American English — male
-    "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam",
-    "am_michael", "am_onyx", "am_puck", "am_santa",
+    "am_adam",
+    "am_echo",
+    "am_eric",
+    "am_fenrir",
+    "am_liam",
+    "am_michael",
+    "am_onyx",
+    "am_puck",
+    "am_santa",
     // British English — female
-    "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+    "bf_alice",
+    "bf_emma",
+    "bf_isabella",
+    "bf_lily",
     // British English — male
-    "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
-    // Japanese
-    "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo",
-    // Mandarin
-    "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
-    "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
-    // Spanish
-    "ef_dora", "em_alex", "em_santa",
-    // French
-    "ff_siwis",
-    // Hindi
-    "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
-    // Italian
-    "if_sara", "im_nicola",
-    // Portuguese
-    "pf_dora", "pm_alex", "pm_santa",
+    "bm_daniel",
+    "bm_fable",
+    "bm_george",
+    "bm_lewis",
+    // // Japanese
+    // "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo",
+    // // Mandarin
+    // "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
+    // "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
+    // // Spanish
+    // "ef_dora", "em_alex", "em_santa",
+    // // French
+    // "ff_siwis",
+    // // Hindi
+    // "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
+    // // Italian
+    // "if_sara", "im_nicola",
+    // // Portuguese
+    // "pf_dora", "pm_alex", "pm_santa",
 ];
 
 const DEFAULT_VOICE: &str = "af_bella";
-/// Logical pixels per visible block item (100 px height + 4 px gap).
-const ITEM_HEIGHT: f32 = 104.0;
+/// Gap between block items in the VerticalLayout (matches `spacing: 4px` in Slint).
+const ITEM_GAP: f32 = 4.0;
+/// Fixed overhead per block: top+bottom padding (20 px) + header row (16 px) + gap (4 px).
+const BLOCK_OVERHEAD: f32 = 40.0;
+/// Rendered line-height at 14 px font with ~1.2× leading (Slint default).
+const LINE_HEIGHT: f32 = 18.0;
+/// Estimated characters that fit on one display line in the script column.
+/// Column ≈ 1024 px window − 240 px sidebar − 24 px outer pad − 36 px inner (pad+dot+gap)
+/// = ~724 px; at ~8 px/char average for 14 px font → ~90 chars.
+const CHARS_PER_LINE: usize = 90;
 
 const PREVIEW_TEXT: &str =
     "Hello, this is a preview. Testing one two three. How does this voice sound to you?";
@@ -168,7 +198,10 @@ impl AppState {
 
     fn save_config(&self) {
         let cfg = config::Config {
-            last_dir: self.last_dir.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            last_dir: self
+                .last_dir
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
             voice_assignments: self.voice_assignments.clone(),
             character_modes: self
                 .characters
@@ -183,7 +216,8 @@ impl AppState {
         if let Some(c) = self.characters.iter_mut().find(|c| c.name == name) {
             c.voice = voice.to_string();
         }
-        self.voice_assignments.insert(name.to_string(), voice.to_string());
+        self.voice_assignments
+            .insert(name.to_string(), voice.to_string());
         self.save_config();
     }
 
@@ -254,23 +288,50 @@ impl AppState {
         (from..self.blocks.len()).find(|&i| self.block_mode(i) != CharacterMode::Hide)
     }
 
+    /// Estimate the rendered height of a single block from its text content.
+    ///
+    /// Each source line is divided by CHARS_PER_LINE to account for word-wrap,
+    /// then multiplied by LINE_HEIGHT.  BLOCK_OVERHEAD covers padding + header.
+    fn estimated_height(&self, block_index: usize) -> f32 {
+        let Some(block) = self.blocks.get(block_index) else {
+            return LINE_HEIGHT + BLOCK_OVERHEAD;
+        };
+        let display_lines: usize = block
+            .content
+            .lines()
+            .map(|l| {
+                if l.is_empty() {
+                    1
+                } else {
+                    (l.len() + CHARS_PER_LINE - 1) / CHARS_PER_LINE
+                }
+            })
+            .sum::<usize>()
+            .max(1);
+        BLOCK_OVERHEAD + display_lines as f32 * LINE_HEIGHT
+    }
+
     /// Pixel scroll offset for `block_index`.
     ///
-    /// HIDE blocks have `height: 0` in Slint's VerticalLayout, so we count only
-    /// non-hidden blocks before `block_index` to get the true visual position.
+    /// Sums estimated heights of all non-hidden blocks before `block_index`,
+    /// plus the 4 px gap between items.
     fn pixel_offset(&self, block_index: usize) -> f32 {
         (0..block_index)
             .filter(|&i| self.block_mode(i) != CharacterMode::Hide)
-            .count() as f32 * ITEM_HEIGHT
+            .map(|i| self.estimated_height(i) + ITEM_GAP)
+            .sum()
     }
 
     // ── Slint model builders ──────────────────────────────────────────────
 
-    /// Returns ALL blocks in the model; hidden ones get height 0 / invisible in Slint.
+    /// Returns only non-hidden blocks. Hidden blocks are excluded from the model
+    /// entirely so the Slint for loop never needs a `height: 0` condition (which
+    /// causes a preferred-height ↔ height binding cycle in Slint's layout engine).
     fn slint_blocks(&self) -> Vec<ScriptBlock> {
         self.blocks
             .iter()
             .enumerate()
+            .filter(|(i, _)| self.block_mode(*i) != CharacterMode::Hide)
             .map(|(i, b)| ScriptBlock {
                 marker: b.marker as i32,
                 original_index: i as i32,
@@ -356,11 +417,7 @@ fn spawn_tts(
 
 // ── Voice preview spawn ───────────────────────────────────────────────────────
 
-fn spawn_preview(
-    voice: String,
-    state: Arc<Mutex<AppState>>,
-    handle: tokio::runtime::Handle,
-) {
+fn spawn_preview(voice: String, state: Arc<Mutex<AppState>>, handle: tokio::runtime::Handle) {
     let cancel = {
         let mut s = state.lock().unwrap();
         s.cancel.store(true, Ordering::SeqCst);
@@ -417,7 +474,10 @@ async fn main() -> Result<()> {
 
     // Populate the voice list (static for the session).
     ui.set_voices(ModelRc::new(VecModel::from(
-        VOICES.iter().map(|&v| SharedString::from(v)).collect::<Vec<_>>(),
+        VOICES
+            .iter()
+            .map(|&v| SharedString::from(v))
+            .collect::<Vec<_>>(),
     )));
 
     // ── open-file-dialog ──────────────────────────────────────────────────

@@ -129,8 +129,8 @@ fn flush(
 
     let content = lines.join("\n").trim().to_string();
 
-    // Only skip a block that has neither a character nor any content.
-    if content.is_empty() && character.is_empty() {
+    // Skip blocks with no readable content (e.g. sections that were all code).
+    if content.is_empty() {
         return;
     }
 
