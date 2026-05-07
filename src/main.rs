@@ -30,19 +30,14 @@ const DEFAULT_VOICE: &str = "af_bella";
 const PREVIEW_TEXT: &str =
     "Hello, this is a preview. Testing one two three. How does this voice sound to you?";
 
-// Height constants — must match Slint rendering
-// Each pane uses VerticalLayout { spacing: 4px; padding: 4px; }
-const PANE_SPACING: f32 = 4.0;
-const PANE_PADDING: f32 = 4.0;
-// Actor items: header 18px + padding 12px + text lines at ~19px/line
-const ACTOR_H_BASE: f32 = 30.0;
-const ACTOR_H_LINE: f32 = 19.0;
-// Editor items: header 16px + padding 10px + text lines at ~17px/line
-const EDITOR_H_BASE: f32 = 26.0;
-const EDITOR_H_LINE: f32 = 17.0;
-// Keys items: header 18px + padding 10px + steps at ~15px/step
-const KEYS_H_BASE: f32 = 28.0;
-const KEYS_H_STEP: f32 = 15.0;
+// Row height estimation. Each grid row = max of the three cell heights.
+// Generous constants so min-height is rarely exceeded by actual content.
+const ACTOR_H_BASE: f32 = 46.0;  // 8+8 padding + 14 header + 16 slack
+const ACTOR_H_LINE: f32 = 24.0;  // 13px font + line spacing + buffer
+const EDITOR_H_BASE: f32 = 44.0;
+const EDITOR_H_LINE: f32 = 22.0;
+const KEYS_H_BASE: f32 = 44.0;
+const KEYS_H_STEP: f32 = 20.0;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum ActorMode {
@@ -338,73 +333,72 @@ impl AppState {
 
     // ── Height / scroll estimation ────────────────────────────────────────────
 
-    fn actor_item_height(text: &str) -> f32 {
-        let lines = text.lines().count().max(1) as f32;
-        ACTOR_H_BASE + lines * ACTOR_H_LINE
-    }
-
-    fn editor_item_height(text: &str) -> f32 {
+    fn editor_cell_height(text: &str) -> f32 {
         let lines = text.lines().count().max(1) as f32;
         EDITOR_H_BASE + lines * EDITOR_H_LINE
     }
 
-    fn keys_item_height(steps: &[parser::KeyStep]) -> f32 {
-        let n = steps.len().max(1) as f32;
-        KEYS_H_BASE + n * KEYS_H_STEP
+    fn actor_cell_height(text: &str) -> f32 {
+        let lines = text.lines().count().max(1) as f32;
+        ACTOR_H_BASE + lines * ACTOR_H_LINE
     }
 
-    fn compute_actor_scroll(&self) -> f32 {
-        if self.prod_actor_list_idx <= 0 {
-            return 0.0;
-        }
-        let idx = self.prod_actor_list_idx as usize;
-        let heights: f32 = self.actor_indices[..idx]
-            .iter()
-            .map(|&ev| {
-                if let EventKind::Line { text, .. } = &self.events[ev].kind {
-                    Self::actor_item_height(text)
-                } else {
-                    0.0
-                }
-            })
-            .sum();
-        PANE_PADDING + heights + (idx as f32) * PANE_SPACING
+    fn keys_cell_height(steps: &[parser::KeyStep]) -> f32 {
+        KEYS_H_BASE + steps.len().max(1) as f32 * KEYS_H_STEP
     }
 
-    fn compute_editor_scroll(&self) -> f32 {
-        if self.prod_editor_list_idx <= 0 {
-            return 0.0;
-        }
-        let idx = self.prod_editor_list_idx as usize;
-        let heights: f32 = self.editor_indices[..idx]
-            .iter()
-            .map(|&ev| {
-                if let EventKind::Editor { text } = &self.events[ev].kind {
-                    Self::editor_item_height(text)
-                } else {
-                    0.0
-                }
-            })
-            .sum();
-        PANE_PADDING + heights + (idx as f32) * PANE_SPACING
+    fn unified_row_height(&self, marker: u32) -> f32 {
+        let editor_h = self.events.iter()
+            .find(|e| e.start == marker && matches!(e.kind, EventKind::Editor { .. }))
+            .map(|e| if let EventKind::Editor { text } = &e.kind {
+                Self::editor_cell_height(text)
+            } else { 8.0 })
+            .unwrap_or(8.0);
+
+        let actor_h = self.events.iter()
+            .find(|e| e.start == marker && matches!(e.kind, EventKind::Line { .. }))
+            .map(|e| if let EventKind::Line { text, .. } = &e.kind {
+                Self::actor_cell_height(text)
+            } else { 8.0 })
+            .unwrap_or(8.0);
+
+        let keys_h = self.events.iter()
+            .find(|e| e.start == marker && matches!(e.kind, EventKind::Keys { .. }))
+            .map(|e| if let EventKind::Keys { steps } = &e.kind {
+                Self::keys_cell_height(steps)
+            } else { 8.0 })
+            .unwrap_or(8.0);
+
+        editor_h.max(actor_h).max(keys_h)
     }
 
-    fn compute_keys_scroll(&self) -> f32 {
-        if self.prod_keys_list_idx <= 0 {
+    fn sorted_unique_markers(&self) -> Vec<u32> {
+        let mut markers: Vec<u32> = self.events.iter().map(|e| e.start).collect();
+        markers.sort_unstable();
+        markers.dedup();
+        markers
+    }
+
+    fn compute_viewport_height(&self) -> f32 {
+        let total: f32 = self.sorted_unique_markers()
+            .iter()
+            .map(|&m| self.unified_row_height(m))
+            .sum();
+        // Generous buffer so min-height rows that grow beyond estimate
+        // don't leave the bottom of the list unreachable.
+        total * 1.5 + 400.0
+    }
+
+    fn compute_grid_scroll(&self) -> f32 {
+        if self.prod_marker < 0 {
             return 0.0;
         }
-        let idx = self.prod_keys_list_idx as usize;
-        let heights: f32 = self.keys_indices[..idx]
+        let target = self.prod_marker as u32;
+        self.sorted_unique_markers()
             .iter()
-            .map(|&ev| {
-                if let EventKind::Keys { steps } = &self.events[ev].kind {
-                    Self::keys_item_height(steps)
-                } else {
-                    0.0
-                }
-            })
-            .sum();
-        PANE_PADDING + heights + (idx as f32) * PANE_SPACING
+            .take_while(|&&m| m < target)
+            .map(|&m| self.unified_row_height(m))
+            .sum()
     }
 
     // ── Slint model builders ──────────────────────────────────────────────────
@@ -416,68 +410,6 @@ impl AppState {
                 name: SharedString::from(a.name.as_str()),
                 voice: SharedString::from(a.voice.as_str()),
                 mode: SharedString::from(a.mode.as_str()),
-            })
-            .collect()
-    }
-
-    fn make_actor_rows(&self) -> Vec<ActorRow> {
-        self.actor_indices
-            .iter()
-            .map(|&ev_idx| {
-                let ev = &self.events[ev_idx];
-                if let EventKind::Line { actor, text } = &ev.kind {
-                    let mode = self.actor_mode_for_event(ev_idx);
-                    ActorRow {
-                        marker: ev.start as i32,
-                        end_marker: ev.end as i32,
-                        event_idx: ev_idx as i32,
-                        actor: SharedString::from(actor.as_str()),
-                        text: SharedString::from(text.as_str()),
-                        mode: SharedString::from(mode.as_str()),
-                    }
-                } else {
-                    ActorRow::default()
-                }
-            })
-            .collect()
-    }
-
-    fn make_editor_rows(&self) -> Vec<EditorRow> {
-        self.editor_indices
-            .iter()
-            .map(|&ev_idx| {
-                let ev = &self.events[ev_idx];
-                if let EventKind::Editor { text } = &ev.kind {
-                    EditorRow {
-                        marker: ev.start as i32,
-                        end_marker: ev.end as i32,
-                        text: SharedString::from(text.as_str()),
-                    }
-                } else {
-                    EditorRow::default()
-                }
-            })
-            .collect()
-    }
-
-    fn make_keys_rows(&self, active_step: Option<usize>) -> Vec<KeysRow> {
-        let running_ev = self.prod_keys_ev_idx();
-        self.keys_indices
-            .iter()
-            .map(|&ev_idx| {
-                let ev = &self.events[ev_idx];
-                if let EventKind::Keys { steps } = &ev.kind {
-                    let is_running = self.keys_running && running_ev == Some(ev_idx);
-                    let step = if is_running { active_step } else { None };
-                    KeysRow {
-                        marker: ev.start as i32,
-                        end_marker: ev.end as i32,
-                        display: SharedString::from(parser::format_steps(steps, step)),
-                        running: is_running,
-                    }
-                } else {
-                    KeysRow::default()
-                }
             })
             .collect()
     }
@@ -541,20 +473,21 @@ impl AppState {
                     (false, String::new(), 0)
                 };
 
-            let (has_keys, keys_display, keys_active) =
+            let (has_keys, keys_display, keys_end_marker, keys_active) =
                 if let Some((idx, ev)) = keys_ev {
                     if let EventKind::Keys { steps } = &ev.kind {
                         let active = self.keys_triggered.contains(&idx);
-                        (true, parser::format_steps(steps, None), active)
+                        (true, parser::format_steps(steps, None), ev.end as i32, active)
                     } else {
-                        (false, String::new(), false)
+                        (false, String::new(), 0, false)
                     }
                 } else {
-                    (false, String::new(), false)
+                    (false, String::new(), 0, false)
                 };
 
             rows.push(GridRow {
                 marker: marker as i32,
+                row_height: self.unified_row_height(marker) as i32,
                 has_actor,
                 actor_event_idx,
                 actor_name: SharedString::from(actor_name),
@@ -565,6 +498,7 @@ impl AppState {
                 editor_end_marker,
                 has_keys,
                 keys_display: SharedString::from(keys_display),
+                keys_end_marker,
                 keys_active,
             });
         }
@@ -585,19 +519,9 @@ impl AppState {
 // ── Apply production UI state ─────────────────────────────────────────────────
 
 fn update_prod_ui(ui: &AppWindow, s: &AppState) {
-    ui.set_prod_actor_idx(s.prod_actor_list_idx);
-    ui.set_prod_actor_scroll(s.compute_actor_scroll());
-    ui.set_prod_editor_idx(s.prod_editor_list_idx);
-    ui.set_prod_editor_scroll(s.compute_editor_scroll());
-    ui.set_prod_keys_idx(s.prod_keys_list_idx);
-    ui.set_prod_keys_scroll(s.compute_keys_scroll());
+    ui.set_prod_marker(s.prod_marker as i32);
+    ui.set_prod_scroll(s.compute_grid_scroll());
     ui.set_prod_status(SharedString::from(s.prod_status()));
-}
-
-fn update_keys_progress(ui: &AppWindow, s: &AppState, step: usize) {
-    let rows = s.make_keys_rows(Some(step));
-    ui.set_prod_keys_rows(ModelRc::new(VecModel::from(rows)));
-    ui.set_prod_keys_step(step as i32);
 }
 
 // ── TTS helpers ───────────────────────────────────────────────────────────────
@@ -842,18 +766,24 @@ fn advance_production(
                     break;
                 }
                 let step = *rx.borrow();
-                let rows = {
+                let display = {
                     let s = state_prog.lock().unwrap();
-                    s.make_keys_rows(Some(step))
+                    s.prod_keys_ev_idx()
+                        .and_then(|ev_idx| {
+                            if let EventKind::Keys { steps } = &s.events[ev_idx].kind {
+                                Some(parser::format_steps(steps, Some(step)))
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_default()
                 };
                 let _ = slint::invoke_from_event_loop({
                     let ui_weak = ui_prog.clone();
                     move || {
                         if let Some(ui) = ui_weak.upgrade() {
-                            update_keys_progress(&ui, &AppState::new(), 0);
-                            // Direct row + step update without AppState:
-                            ui.set_prod_keys_rows(ModelRc::new(VecModel::from(rows)));
-                            ui.set_prod_keys_step(step as i32);
+                            ui.set_prod_keys_running(true);
+                            ui.set_prod_keys_display(SharedString::from(display));
                         }
                     }
                 });
@@ -864,20 +794,19 @@ fn advance_production(
         handle.spawn(async move {
             keys::run(steps, progress_tx, keys_cancel).await;
 
-            let rows = {
+            {
                 let mut s = state_done.lock().unwrap();
                 s.keys_running = false;
                 if let Some(ref tx) = s.keys_done_tx {
                     let _ = tx.send(true);
                 }
-                s.make_keys_rows(None)
-            };
+            }
             let _ = slint::invoke_from_event_loop({
                 let ui_weak = ui_done.clone();
                 move || {
                     if let Some(ui) = ui_weak.upgrade() {
-                        ui.set_prod_keys_rows(ModelRc::new(VecModel::from(rows)));
-                        ui.set_prod_keys_step(-1);
+                        ui.set_prod_keys_running(false);
+                        ui.set_prod_keys_display(SharedString::default());
                     }
                 }
             });
@@ -998,23 +927,17 @@ async fn main() -> Result<()> {
                 Ok(()) => {
                     let grid_rows = s.make_grid_rows();
                     let actor_entries = s.make_actor_entries();
-                    let actor_rows = s.make_actor_rows();
-                    let editor_rows = s.make_editor_rows();
-                    let keys_rows = s.make_keys_rows(None);
+                    let viewport_h = s.compute_viewport_height();
 
                     if let Some(ui) = ui_weak.upgrade() {
                         ui.set_grid_rows(ModelRc::new(VecModel::from(grid_rows)));
+                        ui.set_grid_viewport_height(viewport_h);
                         ui.set_actors(ModelRc::new(VecModel::from(actor_entries)));
-                        ui.set_actor_rows(ModelRc::new(VecModel::from(actor_rows)));
-                        ui.set_editor_rows(ModelRc::new(VecModel::from(editor_rows)));
-                        ui.set_prod_keys_rows(ModelRc::new(VecModel::from(keys_rows)));
                         ui.set_playing_index(-1);
-                        ui.set_prod_actor_idx(-1);
-                        ui.set_prod_editor_idx(-1);
-                        ui.set_prod_keys_idx(-1);
-                        ui.set_prod_actor_scroll(0.0);
-                        ui.set_prod_editor_scroll(0.0);
-                        ui.set_prod_keys_scroll(0.0);
+                        ui.set_prod_marker(-1);
+                        ui.set_prod_scroll(0.0);
+                        ui.set_prod_keys_running(false);
+                        ui.set_prod_keys_display(SharedString::default());
                         ui.set_prod_status(SharedString::from(s.prod_status()));
                     }
                 }
@@ -1056,13 +979,13 @@ async fn main() -> Result<()> {
             s.production_mode = !s.production_mode;
             let prod = s.production_mode;
             let grid_rows = s.make_grid_rows();
-            let keys_rows = s.make_keys_rows(None);
+            let viewport_h = s.compute_viewport_height();
 
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_playing_index(-1);
                 ui.set_production_mode(prod);
                 ui.set_grid_rows(ModelRc::new(VecModel::from(grid_rows)));
-                ui.set_prod_keys_rows(ModelRc::new(VecModel::from(keys_rows)));
+                ui.set_grid_viewport_height(viewport_h);
                 update_prod_ui(&ui, &s);
             }
         }
@@ -1077,12 +1000,11 @@ async fn main() -> Result<()> {
             s.tts_cancel.store(true, Ordering::SeqCst);
             s.keys_cancel.store(true, Ordering::SeqCst);
             s.reset_production();
-            let keys_rows = s.make_keys_rows(None);
 
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_playing_index(-1);
-                ui.set_prod_keys_step(-1);
-                ui.set_prod_keys_rows(ModelRc::new(VecModel::from(keys_rows)));
+                ui.set_prod_keys_running(false);
+                ui.set_prod_keys_display(SharedString::default());
                 update_prod_ui(&ui, &s);
             }
         }
@@ -1138,12 +1060,12 @@ async fn main() -> Result<()> {
             s.cycle_actor_mode(name.as_str());
             s.rebuild_indices();
             let grid_rows = s.make_grid_rows();
-            let entries = s.make_actor_entries();
-            let actor_rows = s.make_actor_rows();
+            let actor_entries = s.make_actor_entries();
+            let viewport_h = s.compute_viewport_height();
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_grid_rows(ModelRc::new(VecModel::from(grid_rows)));
-                ui.set_actors(ModelRc::new(VecModel::from(entries)));
-                ui.set_actor_rows(ModelRc::new(VecModel::from(actor_rows)));
+                ui.set_grid_viewport_height(viewport_h);
+                ui.set_actors(ModelRc::new(VecModel::from(actor_entries)));
             }
         }
     });
