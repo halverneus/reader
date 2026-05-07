@@ -1,7 +1,7 @@
 import { Button, LineEdit, VerticalBox, HorizontalBox, ScrollView, ComboBox } from "std-widgets.slint";
 
 export struct ScriptBlock {
-    marker: int,
+    marker: string,
     original-index: int,
     character: string,
     content: string,
@@ -32,7 +32,7 @@ export component AppWindow inherits Window {
     in-out property <ScriptBlock>      prod-current-block;
     in-out property <bool>             prod-has-current: false;
     in-out property <[ScriptBlock]>    prod-bottom-blocks: [];
-    in-out property <length>           max-block-height: 120px;
+    in-out property <length>           max-block-height: 180px;
     in-out property <string>           prod-status: "";
 
     // Scroll triggers — Rust sets these via invoke_scroll_to / invoke_scroll_past_to_bottom.

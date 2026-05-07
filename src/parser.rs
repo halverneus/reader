@@ -1,7 +1,7 @@
 /// A single time-marked block of script content.
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub marker: u32,
+    pub marker: String,
     pub character: String,
     pub content: String,
 }
@@ -26,7 +26,7 @@ pub fn parse(input: &str) -> Script {
     let body = strip_header(input);
 
     let mut blocks: Vec<Block> = Vec::new();
-    let mut current_marker: Option<u32> = None;
+    let mut current_marker: Option<String> = None;
     let mut current_character = String::new();
     let mut current_lines: Vec<&str> = Vec::new();
     let mut in_code_block = false;
@@ -98,11 +98,14 @@ fn strip_header(input: &str) -> &str {
     input
 }
 
-fn parse_marker(line: &str) -> Option<u32> {
+fn parse_marker(line: &str) -> Option<String> {
     if line.len() > 2 && line.starts_with('*') && line.ends_with('*') {
         let inner = &line[1..line.len() - 1];
-        if inner.chars().all(|c| c.is_ascii_digit()) {
-            return inner.parse().ok();
+        let mut chars = inner.chars();
+        if let Some(first) = chars.next() {
+            if first.is_ascii_digit() && chars.all(|c| c.is_ascii_alphanumeric()) {
+                return Some(inner.to_string());
+            }
         }
     }
     None
@@ -121,7 +124,7 @@ fn parse_character(line: &str) -> Option<String> {
 
 fn flush(
     blocks: &mut Vec<Block>,
-    marker: Option<u32>,
+    marker: Option<String>,
     character: &str,
     lines: &[&str],
 ) {

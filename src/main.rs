@@ -261,7 +261,7 @@ impl AppState {
     fn make_slint_block(&self, block_idx: usize) -> ScriptBlock {
         let b = &self.blocks[block_idx];
         ScriptBlock {
-            marker: b.marker as i32,
+            marker: SharedString::from(b.marker.as_str()),
             original_index: block_idx as i32,
             character: SharedString::from(b.character.as_str()),
             content: SharedString::from(b.content.as_str()),
