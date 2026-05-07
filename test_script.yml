@@ -19,11 +19,12 @@ script:
   start: 200
   end: 300
   keystrokes:
-  - "c:ctrl+a"  // Select all
-  - "t:Console.WriteLine(\"...and I'm Glitch!!!\");"  // Type text
+  - "k:ctrl+a"  // Select all
+  - |
+    t:Console.WriteLine("...and I'm Glitch!!!");
   - "k:enter"  // Press Enter
   - "w:3000"  // Wait 3 seconds
-  - "c:ctrl+a"  // Select all
+  - "k:ctrl+a"  // Select all
   - "t:Console.WriteLine(\"Hello!\");"  // Type text
   - "k:enter"  // Press Enter
 
@@ -63,14 +64,13 @@ script:
   start: 600
   end: 800
   keystrokes:
-  - "c:ctrl+a"  // Select all
-  - "t:Console.Write(\"Enter a number: \");"  // Type text
-  - "k:enter"  // Press Enter
-  - "t:string input = Console.ReadLine()!;"  // Type text
-  - "k:enter"  // Press Enter
-  - "t:int number = int.Parse(input);"  // Type text
-  - "k:enter"  // Press Enter
-  - "t:Console.WriteLine($\"You entered: {number}\");"  // Type text
+  - "k:ctrl+a"  // Select all
+  - |
+    t:Console.Write("Enter a number: ");
+    string input = Console.ReadLine()!;
+    int number = int.Parse(input);
+
+    Console.WriteLine($"You entered: {number}");
   - "k:enter"  // Press Enter
 
 - type: "line"
@@ -87,10 +87,14 @@ script:
 
 - type: "keys"
   start: 800
+  end: 850
+  keystrokes:
+  - "k:f5"  // Run (F5)
+
+- type: "keys"
+  start: 850
   end: 900
   keystrokes:
-  - "c:f5"  // Run (F5)
-  - "w:2000"  // Wait 2 seconds
   - "t:hello"  // Type text
   - "k:enter"  // Press Enter
 

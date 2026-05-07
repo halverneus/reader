@@ -1,16 +1,19 @@
 mod config;
 mod docker;
+mod keys;
 mod parser;
 mod tts;
 
 use anyhow::Result;
+use parser::{Event, EventKind};
 use slint::{ModelRc, SharedString, VecModel};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use tokio::sync::watch;
 
 slint::include_modules!();
 
@@ -24,20 +27,31 @@ const VOICES: &[&str] = &[
 ];
 
 const DEFAULT_VOICE: &str = "af_bella";
-const BLOCK_OVERHEAD: f32 = 40.0;
-const LINE_HEIGHT: f32 = 18.0;
-const CHARS_PER_LINE: usize = 90;
 const PREVIEW_TEXT: &str =
     "Hello, this is a preview. Testing one two three. How does this voice sound to you?";
 
+// Height constants — must match Slint rendering
+// Each pane uses VerticalLayout { spacing: 4px; padding: 4px; }
+const PANE_SPACING: f32 = 4.0;
+const PANE_PADDING: f32 = 4.0;
+// Actor items: header 18px + padding 12px + text lines at ~19px/line
+const ACTOR_H_BASE: f32 = 30.0;
+const ACTOR_H_LINE: f32 = 19.0;
+// Editor items: header 16px + padding 10px + text lines at ~17px/line
+const EDITOR_H_BASE: f32 = 26.0;
+const EDITOR_H_LINE: f32 = 17.0;
+// Keys items: header 18px + padding 10px + steps at ~15px/step
+const KEYS_H_BASE: f32 = 28.0;
+const KEYS_H_STEP: f32 = 15.0;
+
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum CharacterMode {
+enum ActorMode {
     Read,
     Skip,
     Hide,
 }
 
-impl CharacterMode {
+impl ActorMode {
     fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
@@ -64,59 +78,85 @@ impl CharacterMode {
 }
 
 #[derive(Clone)]
-struct CharacterConfig {
+struct ActorConfig {
     name: String,
     voice: String,
-    mode: CharacterMode,
-}
-
-struct ProdData {
-    top: Vec<ScriptBlock>,
-    current_block: ScriptBlock,
-    has_current: bool,
-    bottom: Vec<ScriptBlock>,
-    status: String,
+    mode: ActorMode,
 }
 
 struct AppState {
-    blocks: Vec<parser::Block>,
-    characters: Vec<CharacterConfig>,
+    events: Vec<Event>,
+    actor_configs: Vec<ActorConfig>,
     last_dir: Option<PathBuf>,
     voice_assignments: HashMap<String, String>,
-    character_modes: HashMap<String, String>,
-    current_top_index: i32,
-    cancel: Arc<AtomicBool>,
+    actor_modes_map: HashMap<String, String>,
+
     production_mode: bool,
-    prod_position: i32,
+
+    // Precomputed flat lists (indices into `events`)
+    actor_indices: Vec<usize>,
+    editor_indices: Vec<usize>,
+    keys_indices: Vec<usize>,
+
+    // Production timeline
+    prod_marker: i64,
+    actor_history: Vec<i64>,
+    keys_triggered: HashSet<usize>, // event indices already triggered
+
+    // Production per-pane positions (index in flat list, -1 = none)
+    prod_actor_list_idx: i32,
+    prod_editor_list_idx: i32,
+    prod_keys_list_idx: i32,
+
+    // Keystroke state
+    keys_running: bool,
+    keys_running_end: u32,
+    keys_done_tx: Option<watch::Sender<bool>>,
+    keys_done_rx: Option<watch::Receiver<bool>>,
+
+    tts_cancel: Arc<AtomicBool>,
+    keys_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
     fn new() -> Self {
         let cfg = config::Config::load();
         AppState {
-            blocks: Vec::new(),
-            characters: Vec::new(),
+            events: Vec::new(),
+            actor_configs: Vec::new(),
             last_dir: cfg.last_dir.map(PathBuf::from),
             voice_assignments: cfg.voice_assignments,
-            character_modes: cfg.character_modes,
-            current_top_index: -1,
-            cancel: Arc::new(AtomicBool::new(false)),
+            actor_modes_map: cfg.character_modes,
             production_mode: false,
-            prod_position: -1,
+            actor_indices: Vec::new(),
+            editor_indices: Vec::new(),
+            keys_indices: Vec::new(),
+            prod_marker: -1,
+            actor_history: Vec::new(),
+            keys_triggered: HashSet::new(),
+            prod_actor_list_idx: -1,
+            prod_editor_list_idx: -1,
+            prod_keys_list_idx: -1,
+            keys_running: false,
+            keys_running_end: 0,
+            keys_done_tx: None,
+            keys_done_rx: None,
+            tts_cancel: Arc::new(AtomicBool::new(false)),
+            keys_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 
     fn load_script(&mut self, path: &str) -> Result<()> {
         let content = std::fs::read_to_string(path)?;
         let script = parser::parse(&content);
-        self.blocks = script.blocks;
+        self.events = script.events;
 
         if let Some(parent) = PathBuf::from(path).parent() {
             self.last_dir = Some(parent.to_path_buf());
         }
 
-        self.characters = script
-            .characters
+        self.actor_configs = script
+            .actors
             .iter()
             .map(|name| {
                 let voice = self
@@ -124,27 +164,66 @@ impl AppState {
                     .get(name)
                     .cloned()
                     .unwrap_or_else(|| DEFAULT_VOICE.to_string());
-
                 let mode = self
-                    .character_modes
+                    .actor_modes_map
                     .get(name)
-                    .map(|s| CharacterMode::from_str(s))
+                    .map(|s| ActorMode::from_str(s))
                     .unwrap_or_else(|| {
                         if name.eq_ignore_ascii_case("IGNORE") {
-                            CharacterMode::Hide
+                            ActorMode::Hide
                         } else {
-                            CharacterMode::Read
+                            ActorMode::Read
                         }
                     });
-
-                CharacterConfig { name: name.clone(), voice, mode }
+                ActorConfig { name: name.clone(), voice, mode }
             })
             .collect();
 
-        self.current_top_index = self.next_non_hidden(0).map(|i| i as i32).unwrap_or(-1);
-        self.prod_position = -1;
+        self.rebuild_indices();
+        self.reset_production();
         self.save_config();
         Ok(())
+    }
+
+    fn rebuild_indices(&mut self) {
+        self.actor_indices = self
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| {
+                matches!(e.kind, EventKind::Line { .. })
+                    && self.actor_mode_for_event(*i) != ActorMode::Hide
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        self.editor_indices = self
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e.kind, EventKind::Editor { .. }))
+            .map(|(i, _)| i)
+            .collect();
+
+        self.keys_indices = self
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e.kind, EventKind::Keys { .. }))
+            .map(|(i, _)| i)
+            .collect();
+    }
+
+    fn reset_production(&mut self) {
+        self.prod_marker = -1;
+        self.actor_history.clear();
+        self.keys_triggered.clear();
+        self.keys_running = false;
+        self.prod_actor_list_idx = -1;
+        self.prod_editor_list_idx = -1;
+        self.prod_keys_list_idx = -1;
+        self.keys_done_tx = None;
+        self.keys_done_rx = None;
     }
 
     fn save_config(&self) {
@@ -152,209 +231,445 @@ impl AppState {
             last_dir: self.last_dir.as_ref().map(|p| p.to_string_lossy().into_owned()),
             voice_assignments: self.voice_assignments.clone(),
             character_modes: self
-                .characters
+                .actor_configs
                 .iter()
-                .map(|c| (c.name.clone(), c.mode.as_str().to_string()))
+                .map(|a| (a.name.clone(), a.mode.as_str().to_string()))
                 .collect(),
         };
         let _ = cfg.save();
     }
 
-    fn set_character_voice(&mut self, name: &str, voice: &str) {
-        if let Some(c) = self.characters.iter_mut().find(|c| c.name == name) {
-            c.voice = voice.to_string();
+    fn actor_config(&self, name: &str) -> Option<&ActorConfig> {
+        self.actor_configs.iter().find(|a| a.name == name)
+    }
+
+    fn actor_mode_for_event(&self, event_idx: usize) -> ActorMode {
+        if let Some(Event { kind: EventKind::Line { actor, .. }, .. }) =
+            self.events.get(event_idx)
+        {
+            self.actor_config(actor).map(|a| a.mode).unwrap_or(ActorMode::Read)
+        } else {
+            ActorMode::Read
+        }
+    }
+
+    fn voice_for_event(&self, event_idx: usize) -> String {
+        if let Some(Event { kind: EventKind::Line { actor, .. }, .. }) =
+            self.events.get(event_idx)
+        {
+            self.actor_config(actor)
+                .map(|a| a.voice.clone())
+                .unwrap_or_else(|| DEFAULT_VOICE.to_string())
+        } else {
+            DEFAULT_VOICE.to_string()
+        }
+    }
+
+    fn voice_index_for(&self, name: &str) -> usize {
+        self.actor_config(name)
+            .and_then(|a| VOICES.iter().position(|&v| v == a.voice.as_str()))
+            .unwrap_or(0)
+    }
+
+    fn set_actor_voice(&mut self, name: &str, voice: &str) {
+        if let Some(a) = self.actor_configs.iter_mut().find(|a| a.name == name) {
+            a.voice = voice.to_string();
         }
         self.voice_assignments.insert(name.to_string(), voice.to_string());
         self.save_config();
     }
 
-    fn cycle_character_mode(&mut self, name: &str) {
-        if let Some(c) = self.characters.iter_mut().find(|c| c.name == name) {
-            c.mode = c.mode.cycle();
+    fn cycle_actor_mode(&mut self, name: &str) {
+        if let Some(a) = self.actor_configs.iter_mut().find(|a| a.name == name) {
+            a.mode = a.mode.cycle();
         }
         self.save_config();
-    }
-
-    fn voice_index_for(&self, name: &str) -> usize {
-        self.characters
-            .iter()
-            .find(|c| c.name == name)
-            .and_then(|c| VOICES.iter().position(|&v| v == c.voice.as_str()))
-            .unwrap_or(0)
-    }
-
-    fn cycle_to_voice_index(&mut self, name: &str, idx: usize) -> String {
-        let voice = VOICES[idx % VOICES.len()].to_string();
-        self.set_character_voice(name, &voice);
-        voice
     }
 
     fn prev_voice(&mut self, name: &str) -> String {
         let idx = self.voice_index_for(name);
         let new_idx = if idx == 0 { VOICES.len() - 1 } else { idx - 1 };
-        self.cycle_to_voice_index(name, new_idx)
+        let voice = VOICES[new_idx].to_string();
+        self.set_actor_voice(name, &voice);
+        voice
     }
 
     fn next_voice(&mut self, name: &str) -> String {
         let idx = self.voice_index_for(name);
-        self.cycle_to_voice_index(name, (idx + 1) % VOICES.len())
+        let voice = VOICES[(idx + 1) % VOICES.len()].to_string();
+        self.set_actor_voice(name, &voice);
+        voice
     }
 
     fn current_voice_for(&self, name: &str) -> String {
-        self.characters
-            .iter()
-            .find(|c| c.name == name)
-            .map(|c| c.voice.clone())
+        self.actor_config(name)
+            .map(|a| a.voice.clone())
             .unwrap_or_else(|| DEFAULT_VOICE.to_string())
     }
 
-    fn char_for_block(&self, index: usize) -> Option<&CharacterConfig> {
-        let block = self.blocks.get(index)?;
-        self.characters.iter().find(|c| c.name == block.character)
-    }
+    // ── Flat-list helpers ─────────────────────────────────────────────────────
 
-    fn block_mode(&self, index: usize) -> CharacterMode {
-        self.char_for_block(index)
-            .map(|c| c.mode)
-            .unwrap_or(CharacterMode::Read)
-    }
-
-    fn voice_for_block(&self, index: usize) -> String {
-        self.char_for_block(index)
-            .map(|c| c.voice.clone())
-            .unwrap_or_else(|| DEFAULT_VOICE.to_string())
-    }
-
-    fn next_non_hidden(&self, from: usize) -> Option<usize> {
-        (from..self.blocks.len()).find(|&i| self.block_mode(i) != CharacterMode::Hide)
-    }
-
-    fn estimated_height(&self, block_index: usize) -> f32 {
-        let Some(block) = self.blocks.get(block_index) else {
-            return LINE_HEIGHT + BLOCK_OVERHEAD;
-        };
-        let display_lines: usize = block
-            .content
-            .lines()
-            .map(|l| if l.is_empty() { 1 } else { (l.len() + CHARS_PER_LINE - 1) / CHARS_PER_LINE })
-            .sum::<usize>()
-            .max(1);
-        BLOCK_OVERHEAD + display_lines as f32 * LINE_HEIGHT
-    }
-
-    fn max_block_height(&self) -> f32 {
-        self.blocks
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| self.block_mode(*i) != CharacterMode::Hide)
-            .map(|(i, _)| self.estimated_height(i))
-            .fold(80.0f32, f32::max)
-            + 20.0
-    }
-
-    fn visible_blocks(&self) -> Vec<usize> {
-        (0..self.blocks.len())
-            .filter(|&i| self.block_mode(i) != CharacterMode::Hide)
-            .collect()
-    }
-
-    fn make_slint_block(&self, block_idx: usize) -> ScriptBlock {
-        let b = &self.blocks[block_idx];
-        ScriptBlock {
-            marker: SharedString::from(b.marker.as_str()),
-            original_index: block_idx as i32,
-            character: SharedString::from(b.character.as_str()),
-            content: SharedString::from(b.content.as_str()),
-            mode: SharedString::from(self.block_mode(block_idx).as_str()),
+    fn prod_keys_ev_idx(&self) -> Option<usize> {
+        if self.prod_keys_list_idx < 0 {
+            return None;
         }
+        self.keys_indices.get(self.prod_keys_list_idx as usize).copied()
     }
 
-    fn slint_blocks(&self) -> Vec<ScriptBlock> {
-        self.blocks
+    fn most_recent_actor_list_idx(&self, marker: i64) -> i32 {
+        self.actor_indices
             .iter()
             .enumerate()
-            .filter(|(i, _)| self.block_mode(*i) != CharacterMode::Hide)
-            .map(|(i, _)| self.make_slint_block(i))
-            .collect()
+            .filter(|(_, &ev)| self.events[ev].start as i64 <= marker)
+            .last()
+            .map(|(pos, _)| pos as i32)
+            .unwrap_or(-1)
     }
 
-    fn slint_characters(&self) -> Vec<CharacterEntry> {
-        self.characters
+    fn most_recent_editor_list_idx(&self, marker: i64) -> i32 {
+        self.editor_indices
             .iter()
-            .map(|c| CharacterEntry {
-                name: SharedString::from(c.name.as_str()),
-                voice: SharedString::from(c.voice.as_str()),
-                mode: SharedString::from(c.mode.as_str()),
+            .enumerate()
+            .filter(|(_, &ev)| self.events[ev].start as i64 <= marker)
+            .last()
+            .map(|(pos, _)| pos as i32)
+            .unwrap_or(-1)
+    }
+
+    // ── Height / scroll estimation ────────────────────────────────────────────
+
+    fn actor_item_height(text: &str) -> f32 {
+        let lines = text.lines().count().max(1) as f32;
+        ACTOR_H_BASE + lines * ACTOR_H_LINE
+    }
+
+    fn editor_item_height(text: &str) -> f32 {
+        let lines = text.lines().count().max(1) as f32;
+        EDITOR_H_BASE + lines * EDITOR_H_LINE
+    }
+
+    fn keys_item_height(steps: &[parser::KeyStep]) -> f32 {
+        let n = steps.len().max(1) as f32;
+        KEYS_H_BASE + n * KEYS_H_STEP
+    }
+
+    fn compute_actor_scroll(&self) -> f32 {
+        if self.prod_actor_list_idx <= 0 {
+            return 0.0;
+        }
+        let idx = self.prod_actor_list_idx as usize;
+        let heights: f32 = self.actor_indices[..idx]
+            .iter()
+            .map(|&ev| {
+                if let EventKind::Line { text, .. } = &self.events[ev].kind {
+                    Self::actor_item_height(text)
+                } else {
+                    0.0
+                }
+            })
+            .sum();
+        PANE_PADDING + heights + (idx as f32) * PANE_SPACING
+    }
+
+    fn compute_editor_scroll(&self) -> f32 {
+        if self.prod_editor_list_idx <= 0 {
+            return 0.0;
+        }
+        let idx = self.prod_editor_list_idx as usize;
+        let heights: f32 = self.editor_indices[..idx]
+            .iter()
+            .map(|&ev| {
+                if let EventKind::Editor { text } = &self.events[ev].kind {
+                    Self::editor_item_height(text)
+                } else {
+                    0.0
+                }
+            })
+            .sum();
+        PANE_PADDING + heights + (idx as f32) * PANE_SPACING
+    }
+
+    fn compute_keys_scroll(&self) -> f32 {
+        if self.prod_keys_list_idx <= 0 {
+            return 0.0;
+        }
+        let idx = self.prod_keys_list_idx as usize;
+        let heights: f32 = self.keys_indices[..idx]
+            .iter()
+            .map(|&ev| {
+                if let EventKind::Keys { steps } = &self.events[ev].kind {
+                    Self::keys_item_height(steps)
+                } else {
+                    0.0
+                }
+            })
+            .sum();
+        PANE_PADDING + heights + (idx as f32) * PANE_SPACING
+    }
+
+    // ── Slint model builders ──────────────────────────────────────────────────
+
+    fn make_actor_entries(&self) -> Vec<ActorEntry> {
+        self.actor_configs
+            .iter()
+            .map(|a| ActorEntry {
+                name: SharedString::from(a.name.as_str()),
+                voice: SharedString::from(a.voice.as_str()),
+                mode: SharedString::from(a.mode.as_str()),
             })
             .collect()
     }
 
-    fn prod_data(&self) -> ProdData {
-        let visible = self.visible_blocks();
-        let total = visible.len();
-
-        let cur_pos = if self.prod_position < 0 {
-            None
-        } else {
-            visible.iter().position(|&i| i == self.prod_position as usize)
-        };
-
-        match cur_pos {
-            None => ProdData {
-                top: vec![],
-                current_block: ScriptBlock::default(),
-                has_current: false,
-                bottom: visible.iter().map(|&i| self.make_slint_block(i)).collect(),
-                status: format!("0 / {total}"),
-            },
-            Some(cur) => {
-                let top = visible[..cur].iter().map(|&i| self.make_slint_block(i)).collect();
-                let current_block = self.make_slint_block(visible[cur]);
-                let bottom = visible[cur + 1..].iter().map(|&i| self.make_slint_block(i)).collect();
-                ProdData {
-                    top,
-                    current_block,
-                    has_current: true,
-                    bottom,
-                    status: format!("{} / {total}", cur + 1),
+    fn make_actor_rows(&self) -> Vec<ActorRow> {
+        self.actor_indices
+            .iter()
+            .map(|&ev_idx| {
+                let ev = &self.events[ev_idx];
+                if let EventKind::Line { actor, text } = &ev.kind {
+                    let mode = self.actor_mode_for_event(ev_idx);
+                    ActorRow {
+                        marker: ev.start as i32,
+                        end_marker: ev.end as i32,
+                        event_idx: ev_idx as i32,
+                        actor: SharedString::from(actor.as_str()),
+                        text: SharedString::from(text.as_str()),
+                        mode: SharedString::from(mode.as_str()),
+                    }
+                } else {
+                    ActorRow::default()
                 }
-            }
-        }
+            })
+            .collect()
     }
+
+    fn make_editor_rows(&self) -> Vec<EditorRow> {
+        self.editor_indices
+            .iter()
+            .map(|&ev_idx| {
+                let ev = &self.events[ev_idx];
+                if let EventKind::Editor { text } = &ev.kind {
+                    EditorRow {
+                        marker: ev.start as i32,
+                        end_marker: ev.end as i32,
+                        text: SharedString::from(text.as_str()),
+                    }
+                } else {
+                    EditorRow::default()
+                }
+            })
+            .collect()
+    }
+
+    fn make_keys_rows(&self, active_step: Option<usize>) -> Vec<KeysRow> {
+        let running_ev = self.prod_keys_ev_idx();
+        self.keys_indices
+            .iter()
+            .map(|&ev_idx| {
+                let ev = &self.events[ev_idx];
+                if let EventKind::Keys { steps } = &ev.kind {
+                    let is_running = self.keys_running && running_ev == Some(ev_idx);
+                    let step = if is_running { active_step } else { None };
+                    KeysRow {
+                        marker: ev.start as i32,
+                        end_marker: ev.end as i32,
+                        display: SharedString::from(parser::format_steps(steps, step)),
+                        running: is_running,
+                    }
+                } else {
+                    KeysRow::default()
+                }
+            })
+            .collect()
+    }
+
+    fn make_grid_rows(&self) -> Vec<GridRow> {
+        let mut markers: Vec<u32> = self.events.iter().map(|e| e.start).collect();
+        markers.sort_unstable();
+        markers.dedup();
+
+        let mut rows = Vec::new();
+        for marker in markers {
+            let actor_ev = self
+                .events
+                .iter()
+                .enumerate()
+                .find(|(_, e)| e.start == marker && matches!(e.kind, EventKind::Line { .. }));
+            let editor_ev = self
+                .events
+                .iter()
+                .enumerate()
+                .find(|(_, e)| e.start == marker && matches!(e.kind, EventKind::Editor { .. }));
+            let keys_ev = self
+                .events
+                .iter()
+                .enumerate()
+                .find(|(_, e)| e.start == marker && matches!(e.kind, EventKind::Keys { .. }));
+
+            let actor_visible = actor_ev
+                .map(|(idx, _)| self.actor_mode_for_event(idx) != ActorMode::Hide)
+                .unwrap_or(false);
+
+            // Skip rows where the only content is a hidden actor
+            if actor_ev.is_some() && !actor_visible && editor_ev.is_none() && keys_ev.is_none() {
+                continue;
+            }
+
+            let (has_actor, actor_event_idx, actor_name, actor_text, actor_mode) =
+                if let Some((idx, ev)) = actor_ev {
+                    if let EventKind::Line { actor, text } = &ev.kind {
+                        let mode = self.actor_mode_for_event(idx);
+                        if mode == ActorMode::Hide {
+                            (false, 0, String::new(), String::new(), String::new())
+                        } else {
+                            (true, idx as i32, actor.clone(), text.clone(), mode.as_str().to_string())
+                        }
+                    } else {
+                        (false, 0, String::new(), String::new(), String::new())
+                    }
+                } else {
+                    (false, 0, String::new(), String::new(), String::new())
+                };
+
+            let (has_editor, editor_text, editor_end_marker) =
+                if let Some((_, ev)) = editor_ev {
+                    if let EventKind::Editor { text } = &ev.kind {
+                        (true, text.clone(), ev.end as i32)
+                    } else {
+                        (false, String::new(), 0)
+                    }
+                } else {
+                    (false, String::new(), 0)
+                };
+
+            let (has_keys, keys_display, keys_active) =
+                if let Some((idx, ev)) = keys_ev {
+                    if let EventKind::Keys { steps } = &ev.kind {
+                        let active = self.keys_triggered.contains(&idx);
+                        (true, parser::format_steps(steps, None), active)
+                    } else {
+                        (false, String::new(), false)
+                    }
+                } else {
+                    (false, String::new(), false)
+                };
+
+            rows.push(GridRow {
+                marker: marker as i32,
+                has_actor,
+                actor_event_idx,
+                actor_name: SharedString::from(actor_name),
+                actor_text: SharedString::from(actor_text),
+                actor_mode: SharedString::from(actor_mode),
+                has_editor,
+                editor_text: SharedString::from(editor_text),
+                editor_end_marker,
+                has_keys,
+                keys_display: SharedString::from(keys_display),
+                keys_active,
+            });
+        }
+        rows
+    }
+
+    fn prod_status(&self) -> String {
+        let total = self.actor_indices.len();
+        let done = if self.prod_actor_list_idx >= 0 {
+            (self.prod_actor_list_idx + 1) as usize
+        } else {
+            0
+        };
+        format!("{done} / {total}")
+    }
+}
+
+// ── Apply production UI state ─────────────────────────────────────────────────
+
+fn update_prod_ui(ui: &AppWindow, s: &AppState) {
+    ui.set_prod_actor_idx(s.prod_actor_list_idx);
+    ui.set_prod_actor_scroll(s.compute_actor_scroll());
+    ui.set_prod_editor_idx(s.prod_editor_list_idx);
+    ui.set_prod_editor_scroll(s.compute_editor_scroll());
+    ui.set_prod_keys_idx(s.prod_keys_list_idx);
+    ui.set_prod_keys_scroll(s.compute_keys_scroll());
+    ui.set_prod_status(SharedString::from(s.prod_status()));
+}
+
+fn update_keys_progress(ui: &AppWindow, s: &AppState, step: usize) {
+    let rows = s.make_keys_rows(Some(step));
+    ui.set_prod_keys_rows(ModelRc::new(VecModel::from(rows)));
+    ui.set_prod_keys_step(step as i32);
 }
 
 // ── TTS helpers ───────────────────────────────────────────────────────────────
 
-fn spawn_tts(
-    block_index: usize,
+fn cancel_tts(s: &mut AppState) {
+    s.tts_cancel.store(true, Ordering::SeqCst);
+    let cancel = Arc::new(AtomicBool::new(false));
+    s.tts_cancel = cancel;
+}
+
+fn spawn_tts_text(
+    text: String,
+    voice: String,
+    event_idx: i32,
     state: Arc<Mutex<AppState>>,
     ui_weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
 ) {
-    let (content, voice, cancel) = {
+    let cancel = {
         let mut s = state.lock().unwrap();
-        s.cancel.store(true, Ordering::SeqCst);
-        let cancel = Arc::new(AtomicBool::new(false));
-        s.cancel = cancel.clone();
-        if !s.production_mode {
-            s.current_top_index = block_index as i32;
-        }
-        let content = s.blocks[block_index].content.clone();
-        let voice = s.voice_for_block(block_index);
-        (content, voice, cancel)
+        cancel_tts(&mut s);
+        s.tts_cancel.clone()
     };
 
     if let Some(ui) = ui_weak.upgrade() {
-        ui.set_playing_index(block_index as i32);
+        ui.set_playing_index(event_idx);
     }
 
     handle.spawn(async move {
-        if let Err(e) = tts::speak(content, voice, cancel).await {
+        if let Err(e) = tts::speak(text, voice, cancel).await {
             eprintln!("TTS error: {e}");
         }
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                if ui.get_playing_index() == block_index as i32 {
+                if ui.get_playing_index() == event_idx {
+                    ui.set_playing_index(-1);
+                }
+            }
+        });
+    });
+}
+
+fn spawn_tts_deferred(
+    text: String,
+    voice: String,
+    event_idx: i32,
+    keys_rx: Option<watch::Receiver<bool>>,
+    cancel: Arc<AtomicBool>,
+    ui_weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+) {
+    if let Some(ui) = ui_weak.upgrade() {
+        ui.set_playing_index(event_idx);
+    }
+
+    handle.spawn(async move {
+        if let Some(mut rx) = keys_rx {
+            while !*rx.borrow() {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Err(e) = tts::speak(text, voice, cancel).await {
+            eprintln!("TTS deferred error: {e}");
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                if ui.get_playing_index() == event_idx {
                     ui.set_playing_index(-1);
                 }
             }
@@ -365,10 +680,8 @@ fn spawn_tts(
 fn spawn_preview(voice: String, state: Arc<Mutex<AppState>>, handle: tokio::runtime::Handle) {
     let cancel = {
         let mut s = state.lock().unwrap();
-        s.cancel.store(true, Ordering::SeqCst);
-        let cancel = Arc::new(AtomicBool::new(false));
-        s.cancel = cancel.clone();
-        cancel
+        cancel_tts(&mut s);
+        s.tts_cancel.clone()
     };
     handle.spawn(async move {
         if let Err(e) = tts::speak(PREVIEW_TEXT.to_string(), voice, cancel).await {
@@ -377,99 +690,233 @@ fn spawn_preview(voice: String, state: Arc<Mutex<AppState>>, handle: tokio::runt
     });
 }
 
-// ── Production mode advance ───────────────────────────────────────────────────
+// ── Production advance ────────────────────────────────────────────────────────
 
 fn advance_production(
     state: Arc<Mutex<AppState>>,
     ui_weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
 ) {
-    let (block_index, mode, data) = {
-        let mut s = state.lock().unwrap();
-        s.cancel.store(true, Ordering::SeqCst);
-
-        let visible = s.visible_blocks();
-        if visible.is_empty() {
-            return;
-        }
-
-        let next_idx = if s.prod_position < 0 {
-            visible[0]
-        } else {
-            match visible.iter().position(|&i| i == s.prod_position as usize) {
-                Some(p) if p + 1 < visible.len() => visible[p + 1],
-                _ => return,
-            }
-        };
-
-        s.prod_position = next_idx as i32;
-        let mode = s.block_mode(next_idx);
-        let data = s.prod_data();
-        (next_idx, mode, data)
-    };
-
-    if let Some(ui) = ui_weak.upgrade() {
-        ui.set_playing_index(-1);
-        ui.set_prod_top_blocks(ModelRc::new(VecModel::from(data.top)));
-        ui.set_prod_current_block(data.current_block);
-        ui.set_prod_has_current(data.has_current);
-        ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(data.bottom)));
-        ui.set_prod_status(SharedString::from(data.status));
-        ui.invoke_scroll_past_to_bottom();
+    #[derive(Clone)]
+    enum Ev {
+        Line { ev_idx: usize, list_pos: i32, mode: ActorMode, text: String, voice: String },
+        Editor { list_pos: i32 },
+        Keys { ev_idx: usize, list_pos: i32, end: u32, steps: Vec<parser::KeyStep>, already: bool },
     }
 
-    if mode == CharacterMode::Read {
-        spawn_tts(block_index, state, ui_weak, handle);
+    let result = {
+        let mut s = state.lock().unwrap();
+
+        let next_marker = s
+            .events
+            .iter()
+            .filter(|e| (e.start as i64) > s.prod_marker)
+            .map(|e| e.start)
+            .min();
+
+        let Some(marker) = next_marker else { return };
+
+        let old_marker = s.prod_marker;
+        s.tts_cancel.store(true, Ordering::SeqCst);
+        s.actor_history.push(old_marker);
+        s.prod_marker = marker as i64;
+
+        let evs: Vec<Ev> = s
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.start == marker)
+            .map(|(ev_idx, ev)| match &ev.kind {
+                EventKind::Line { text, .. } => {
+                    let list_pos = s
+                        .actor_indices
+                        .iter()
+                        .position(|&i| i == ev_idx)
+                        .map(|p| p as i32)
+                        .unwrap_or(-1);
+                    let mode = s.actor_mode_for_event(ev_idx);
+                    let voice = s.voice_for_event(ev_idx);
+                    Ev::Line { ev_idx, list_pos, mode, text: text.clone(), voice }
+                }
+                EventKind::Editor { .. } => {
+                    let list_pos = s
+                        .editor_indices
+                        .iter()
+                        .position(|&i| i == ev_idx)
+                        .map(|p| p as i32)
+                        .unwrap_or(-1);
+                    Ev::Editor { list_pos }
+                }
+                EventKind::Keys { steps } => {
+                    let list_pos = s
+                        .keys_indices
+                        .iter()
+                        .position(|&i| i == ev_idx)
+                        .map(|p| p as i32)
+                        .unwrap_or(-1);
+                    let already = s.keys_triggered.contains(&ev_idx);
+                    Ev::Keys { ev_idx, list_pos, end: ev.end, steps: steps.clone(), already }
+                }
+            })
+            .collect();
+
+        let mut actor_to_speak: Option<(usize, String, String)> = None;
+        let mut keys_to_run: Option<(usize, Vec<parser::KeyStep>)> = None;
+
+        for ev in &evs {
+            match ev {
+                Ev::Line { ev_idx, list_pos, mode, text, voice } => {
+                    if *list_pos >= 0 {
+                        s.prod_actor_list_idx = *list_pos;
+                    }
+                    if *mode == ActorMode::Read {
+                        actor_to_speak = Some((*ev_idx, text.clone(), voice.clone()));
+                    }
+                }
+                Ev::Editor { list_pos } => {
+                    if *list_pos >= 0 {
+                        s.prod_editor_list_idx = *list_pos;
+                    }
+                }
+                Ev::Keys { ev_idx, list_pos, end, steps, already } => {
+                    if !already {
+                        s.keys_triggered.insert(*ev_idx);
+                        if *list_pos >= 0 {
+                            s.prod_keys_list_idx = *list_pos;
+                        }
+                        s.keys_running = true;
+                        s.keys_running_end = *end;
+                        let (tx, rx) = watch::channel(false);
+                        s.keys_done_tx = Some(tx);
+                        s.keys_done_rx = Some(rx);
+                        keys_to_run = Some((*ev_idx, steps.clone()));
+                    }
+                }
+            }
+        }
+
+        let actor_blocked = if let Some((actor_ev_idx, _, _)) = &actor_to_speak {
+            let actor_start = s.events[*actor_ev_idx].start;
+            s.keys_running && s.keys_running_end <= actor_start
+        } else {
+            false
+        };
+
+        let keys_rx = s.keys_done_rx.clone();
+        let tts_cancel = s.tts_cancel.clone();
+
+        (actor_to_speak, actor_blocked, keys_to_run, keys_rx, tts_cancel)
+    };
+
+    let (actor_to_speak, actor_blocked, keys_to_run, keys_rx, tts_cancel) = result;
+
+    // Update UI
+    {
+        let s = state.lock().unwrap();
+        if let Some(ui) = ui_weak.upgrade() {
+            update_prod_ui(&ui, &s);
+        }
+    }
+
+    // Start keystroke task
+    if let Some((keys_ev_idx, steps)) = keys_to_run {
+        let (progress_tx, progress_rx) = watch::channel(0usize);
+        let keys_cancel = {
+            let mut s = state.lock().unwrap();
+            s.keys_cancel.store(true, Ordering::SeqCst);
+            let cancel = Arc::new(AtomicBool::new(false));
+            s.keys_cancel = cancel.clone();
+            cancel
+        };
+
+        let state_prog = state.clone();
+        let ui_prog = ui_weak.clone();
+        let state_done = state.clone();
+        let ui_done = ui_weak.clone();
+
+        // Progress watcher
+        handle.spawn(async move {
+            let mut rx = progress_rx;
+            loop {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+                let step = *rx.borrow();
+                let rows = {
+                    let s = state_prog.lock().unwrap();
+                    s.make_keys_rows(Some(step))
+                };
+                let _ = slint::invoke_from_event_loop({
+                    let ui_weak = ui_prog.clone();
+                    move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            update_keys_progress(&ui, &AppState::new(), 0);
+                            // Direct row + step update without AppState:
+                            ui.set_prod_keys_rows(ModelRc::new(VecModel::from(rows)));
+                            ui.set_prod_keys_step(step as i32);
+                        }
+                    }
+                });
+            }
+        });
+
+        // Keys execution
+        handle.spawn(async move {
+            keys::run(steps, progress_tx, keys_cancel).await;
+
+            let rows = {
+                let mut s = state_done.lock().unwrap();
+                s.keys_running = false;
+                if let Some(ref tx) = s.keys_done_tx {
+                    let _ = tx.send(true);
+                }
+                s.make_keys_rows(None)
+            };
+            let _ = slint::invoke_from_event_loop({
+                let ui_weak = ui_done.clone();
+                move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_prod_keys_rows(ModelRc::new(VecModel::from(rows)));
+                        ui.set_prod_keys_step(-1);
+                    }
+                }
+            });
+
+            let _ = keys_ev_idx;
+        });
+    }
+
+    // Speak actor line
+    if let Some((event_idx, text, voice)) = actor_to_speak {
+        if actor_blocked {
+            spawn_tts_deferred(
+                text, voice, event_idx as i32,
+                keys_rx, tts_cancel, ui_weak, handle,
+            );
+        } else {
+            spawn_tts_text(text, voice, event_idx as i32, state, ui_weak, handle);
+        }
     }
 }
 
-// ── Browse mode advance ───────────────────────────────────────────────────────
+// ── Production rewind ─────────────────────────────────────────────────────────
 
-fn advance_browse(
+fn rewind_production(
     state: Arc<Mutex<AppState>>,
     ui_weak: slint::Weak<AppWindow>,
-    handle: tokio::runtime::Handle,
 ) {
-    let playing = ui_weak
-        .upgrade()
-        .map(|ui| ui.get_playing_index())
-        .unwrap_or(-1);
+    let mut s = state.lock().unwrap();
+    let Some(prev_marker) = s.actor_history.pop() else { return };
 
-    let target: usize = if playing >= 0 {
-        state.lock().unwrap().cancel.store(true, Ordering::SeqCst);
-        if let Some(ui) = ui_weak.upgrade() {
-            ui.set_playing_index(-1);
-        }
-        let next = state.lock().unwrap().next_non_hidden(playing as usize + 1);
-        let Some(t) = next else { return };
-        t
-    } else {
-        let cur = state.lock().unwrap().current_top_index;
-        if cur < 0 {
-            let first = state.lock().unwrap().next_non_hidden(0);
-            let Some(t) = first else { return };
-            t
-        } else {
-            cur as usize
-        }
-    };
+    s.tts_cancel.store(true, Ordering::SeqCst);
+    s.prod_marker = prev_marker;
+    s.prod_actor_list_idx = s.most_recent_actor_list_idx(prev_marker);
+    s.prod_editor_list_idx = s.most_recent_editor_list_idx(prev_marker);
+    // Keys stay: keystrokes don't rewind
 
-    let mode = state.lock().unwrap().block_mode(target);
-
-    match mode {
-        CharacterMode::Read => {
-            spawn_tts(target, state, ui_weak, handle);
-        }
-        CharacterMode::Skip => {
-            let mut s = state.lock().unwrap();
-            let next = s.next_non_hidden(target + 1);
-            s.current_top_index = next.map(|i| i as i32).unwrap_or(target as i32);
-        }
-        CharacterMode::Hide => {
-            let mut s = state.lock().unwrap();
-            let next = s.next_non_hidden(target + 1);
-            s.current_top_index = next.map(|i| i as i32).unwrap_or(-1);
-        }
+    if let Some(ui) = ui_weak.upgrade() {
+        ui.set_playing_index(-1);
+        update_prod_ui(&ui, &s);
     }
 }
 
@@ -480,7 +927,6 @@ async fn wait_for_kokoro(ui_weak: slint::Weak<AppWindow>) {
         .timeout(std::time::Duration::from_secs(3))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
-
     loop {
         match client.get("http://localhost:8880/health").send().await {
             Ok(resp) if resp.status().is_success() => {
@@ -513,7 +959,7 @@ async fn main() -> Result<()> {
         VOICES.iter().map(|&v| SharedString::from(v)).collect::<Vec<_>>(),
     )));
 
-    // ── open-file-dialog ──────────────────────────────────────────────────
+    // ── open-file-dialog ──────────────────────────────────────────────────────
     ui.on_open_file_dialog({
         let ui_weak = ui.as_weak();
         let state = state.clone();
@@ -523,7 +969,7 @@ async fn main() -> Result<()> {
             tokio::task::spawn_blocking(move || {
                 let mut dialog = rfd::FileDialog::new()
                     .set_title("Open Script")
-                    .add_filter("Script files", &["md", "txt"])
+                    .add_filter("YAML scripts", &["yml", "yaml"])
                     .add_filter("All files", &["*"]);
                 if let Some(dir) = last_dir {
                     dialog = dialog.set_directory(dir);
@@ -540,250 +986,205 @@ async fn main() -> Result<()> {
         }
     });
 
-    // ── load-file ─────────────────────────────────────────────────────────
+    // ── load-file ─────────────────────────────────────────────────────────────
     ui.on_load_file({
         let ui_weak = ui.as_weak();
         let state = state.clone();
         move |path| {
-            state.lock().unwrap().cancel.store(true, Ordering::SeqCst);
+            let mut s = state.lock().unwrap();
+            s.tts_cancel.store(true, Ordering::SeqCst);
 
-            let result = {
-                let mut s = state.lock().unwrap();
-                match s.load_script(path.as_str()) {
-                    Ok(()) => {
-                        let slint_blocks = s.slint_blocks();
-                        let slint_chars = s.slint_characters();
-                        let max_h = s.max_block_height();
-                        let prod = s.prod_data();
-                        Ok((slint_blocks, slint_chars, max_h, prod))
-                    }
-                    Err(e) => Err(format!("Failed to load '{path}': {e}")),
-                }
-            };
+            match s.load_script(path.as_str()) {
+                Ok(()) => {
+                    let grid_rows = s.make_grid_rows();
+                    let actor_entries = s.make_actor_entries();
+                    let actor_rows = s.make_actor_rows();
+                    let editor_rows = s.make_editor_rows();
+                    let keys_rows = s.make_keys_rows(None);
 
-            match result {
-                Ok((slint_blocks, slint_chars, max_h, prod)) => {
                     if let Some(ui) = ui_weak.upgrade() {
-                        ui.set_blocks(ModelRc::new(VecModel::from(slint_blocks)));
-                        ui.set_characters(ModelRc::new(VecModel::from(slint_chars)));
+                        ui.set_grid_rows(ModelRc::new(VecModel::from(grid_rows)));
+                        ui.set_actors(ModelRc::new(VecModel::from(actor_entries)));
+                        ui.set_actor_rows(ModelRc::new(VecModel::from(actor_rows)));
+                        ui.set_editor_rows(ModelRc::new(VecModel::from(editor_rows)));
+                        ui.set_prod_keys_rows(ModelRc::new(VecModel::from(keys_rows)));
                         ui.set_playing_index(-1);
-                        ui.set_max_block_height(max_h);
-                        ui.set_prod_top_blocks(ModelRc::new(VecModel::from(prod.top)));
-                        ui.set_prod_current_block(prod.current_block);
-                        ui.set_prod_has_current(prod.has_current);
-                        ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(prod.bottom)));
-                        ui.set_prod_status(SharedString::from(prod.status));
+                        ui.set_prod_actor_idx(-1);
+                        ui.set_prod_editor_idx(-1);
+                        ui.set_prod_keys_idx(-1);
+                        ui.set_prod_actor_scroll(0.0);
+                        ui.set_prod_editor_scroll(0.0);
+                        ui.set_prod_keys_scroll(0.0);
+                        ui.set_prod_status(SharedString::from(s.prod_status()));
                     }
                 }
-                Err(e) => eprintln!("{e}"),
+                Err(e) => eprintln!("Failed to load '{}': {e}", path.as_str()),
             }
         }
     });
 
-    // ── block-clicked (browse mode only) ──────────────────────────────────
-    ui.on_block_clicked({
-        let ui_weak = ui.as_weak();
-        let state = state.clone();
-        let handle = handle.clone();
-        move |original_index| {
-            let idx = original_index as usize;
-            let mode = state.lock().unwrap().block_mode(idx);
-            match mode {
-                CharacterMode::Read => {
-                    spawn_tts(idx, state.clone(), ui_weak.clone(), handle.clone());
-                }
-                CharacterMode::Skip => {
-                    state.lock().unwrap().current_top_index = idx as i32;
-                }
-                CharacterMode::Hide => {}
-            }
-        }
-    });
-
-    // ── advance-block ─────────────────────────────────────────────────────
+    // ── advance-block (↓) ─────────────────────────────────────────────────────
     ui.on_advance_block({
         let ui_weak = ui.as_weak();
         let state = state.clone();
         let handle = handle.clone();
         move || {
-            let production = state.lock().unwrap().production_mode;
-            if production {
+            if state.lock().unwrap().production_mode {
                 advance_production(state.clone(), ui_weak.clone(), handle.clone());
-            } else {
-                advance_browse(state.clone(), ui_weak.clone(), handle.clone());
             }
         }
     });
 
-    // ── toggle-mode ───────────────────────────────────────────────────────
+    // ── rewind-block (↑) ──────────────────────────────────────────────────────
+    ui.on_rewind_block({
+        let ui_weak = ui.as_weak();
+        let state = state.clone();
+        move || {
+            if state.lock().unwrap().production_mode {
+                rewind_production(state.clone(), ui_weak.clone());
+            }
+        }
+    });
+
+    // ── toggle-mode ───────────────────────────────────────────────────────────
     ui.on_toggle_mode({
         let ui_weak = ui.as_weak();
         let state = state.clone();
         move || {
-            let (prod_mode, data) = {
-                let mut s = state.lock().unwrap();
-                s.cancel.store(true, Ordering::SeqCst);
-                s.production_mode = !s.production_mode;
-                if s.production_mode {
-                    s.prod_position = -1;
-                }
-                (s.production_mode, s.prod_data())
-            };
+            let mut s = state.lock().unwrap();
+            s.tts_cancel.store(true, Ordering::SeqCst);
+            s.production_mode = !s.production_mode;
+            let prod = s.production_mode;
+            let grid_rows = s.make_grid_rows();
+            let keys_rows = s.make_keys_rows(None);
+
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_playing_index(-1);
-                ui.set_production_mode(prod_mode);
-                ui.set_prod_top_blocks(ModelRc::new(VecModel::from(data.top)));
-                ui.set_prod_current_block(data.current_block);
-                ui.set_prod_has_current(data.has_current);
-                ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(data.bottom)));
-                ui.set_prod_status(SharedString::from(data.status));
+                ui.set_production_mode(prod);
+                ui.set_grid_rows(ModelRc::new(VecModel::from(grid_rows)));
+                ui.set_prod_keys_rows(ModelRc::new(VecModel::from(keys_rows)));
+                update_prod_ui(&ui, &s);
             }
         }
     });
 
-    // ── reset-production ──────────────────────────────────────────────────
+    // ── reset-production ──────────────────────────────────────────────────────
     ui.on_reset_production({
         let ui_weak = ui.as_weak();
         let state = state.clone();
         move || {
-            let data = {
-                let mut s = state.lock().unwrap();
-                s.cancel.store(true, Ordering::SeqCst);
-                s.prod_position = -1;
-                s.prod_data()
-            };
+            let mut s = state.lock().unwrap();
+            s.tts_cancel.store(true, Ordering::SeqCst);
+            s.keys_cancel.store(true, Ordering::SeqCst);
+            s.reset_production();
+            let keys_rows = s.make_keys_rows(None);
+
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_playing_index(-1);
-                ui.set_prod_top_blocks(ModelRc::new(VecModel::from(data.top)));
-                ui.set_prod_current_block(data.current_block);
-                ui.set_prod_has_current(data.has_current);
-                ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(data.bottom)));
-                ui.set_prod_status(SharedString::from(data.status));
+                ui.set_prod_keys_step(-1);
+                ui.set_prod_keys_rows(ModelRc::new(VecModel::from(keys_rows)));
+                update_prod_ui(&ui, &s);
             }
         }
     });
 
-    // ── jump-to-index ─────────────────────────────────────────────────────
-    ui.on_jump_to_index({
+    // ── actor-event-clicked (edit mode speak) ─────────────────────────────────
+    ui.on_actor_event_clicked({
         let ui_weak = ui.as_weak();
         let state = state.clone();
         let handle = handle.clone();
-        move |text| {
-            let n: usize = match text.trim().parse::<usize>() {
-                Ok(v) if v >= 1 => v - 1,
-                _ => return,
+        move |event_idx| {
+            let idx = event_idx as usize;
+            let (text, voice, mode) = {
+                let s = state.lock().unwrap();
+                let mode = s.actor_mode_for_event(idx);
+                if mode != ActorMode::Read {
+                    return;
+                }
+                if let Some(Event { kind: EventKind::Line { text, .. }, .. }) = s.events.get(idx) {
+                    (text.clone(), s.voice_for_event(idx), mode)
+                } else {
+                    return;
+                }
             };
-
-            let (block_index, mode, data) = {
-                let mut s = state.lock().unwrap();
-                s.cancel.store(true, Ordering::SeqCst);
-                let visible = s.visible_blocks();
-                let Some(&block_idx) = visible.get(n) else { return };
-                s.prod_position = block_idx as i32;
-                let mode = s.block_mode(block_idx);
-                let data = s.prod_data();
-                (block_idx, mode, data)
-            };
-
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_playing_index(-1);
-                ui.set_prod_top_blocks(ModelRc::new(VecModel::from(data.top)));
-                ui.set_prod_current_block(data.current_block);
-                ui.set_prod_has_current(data.has_current);
-                ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(data.bottom)));
-                ui.set_prod_status(SharedString::from(data.status));
-                ui.invoke_scroll_past_to_bottom();
-            }
-
-            if mode == CharacterMode::Read {
-                spawn_tts(block_index, state.clone(), ui_weak.clone(), handle.clone());
+            if mode == ActorMode::Read {
+                spawn_tts_text(text, voice, event_idx, state.clone(), ui_weak.clone(), handle.clone());
             }
         }
     });
 
-    // ── character-voice-changed ───────────────────────────────────────────
-    ui.on_character_voice_changed({
+    // ── actor-voice-changed ───────────────────────────────────────────────────
+    ui.on_actor_voice_changed({
         let ui_weak = ui.as_weak();
         let state = state.clone();
         move |name, voice| {
-            let slint_chars = {
+            let entries = {
                 let mut s = state.lock().unwrap();
-                s.set_character_voice(name.as_str(), voice.as_str());
-                s.slint_characters()
+                s.set_actor_voice(name.as_str(), voice.as_str());
+                s.make_actor_entries()
             };
             if let Some(ui) = ui_weak.upgrade() {
-                ui.set_characters(ModelRc::new(VecModel::from(slint_chars)));
+                ui.set_actors(ModelRc::new(VecModel::from(entries)));
             }
         }
     });
 
-    // ── character-mode-cycled ─────────────────────────────────────────────
-    ui.on_character_mode_cycled({
+    // ── actor-mode-cycled ─────────────────────────────────────────────────────
+    ui.on_actor_mode_cycled({
         let ui_weak = ui.as_weak();
         let state = state.clone();
         move |name| {
-            let (slint_blocks, slint_chars, max_h, prod) = {
-                let mut s = state.lock().unwrap();
-                s.cycle_character_mode(name.as_str());
-                // Clamp prod_position if it now refers to a hidden block.
-                if s.prod_position >= 0 {
-                    let idx = s.prod_position as usize;
-                    if s.block_mode(idx) == CharacterMode::Hide {
-                        s.prod_position = -1;
-                    }
-                }
-                (s.slint_blocks(), s.slint_characters(), s.max_block_height(), s.prod_data())
-            };
+            let mut s = state.lock().unwrap();
+            s.cycle_actor_mode(name.as_str());
+            s.rebuild_indices();
+            let grid_rows = s.make_grid_rows();
+            let entries = s.make_actor_entries();
+            let actor_rows = s.make_actor_rows();
             if let Some(ui) = ui_weak.upgrade() {
-                ui.set_blocks(ModelRc::new(VecModel::from(slint_blocks)));
-                ui.set_characters(ModelRc::new(VecModel::from(slint_chars)));
-                ui.set_max_block_height(max_h);
-                ui.set_prod_top_blocks(ModelRc::new(VecModel::from(prod.top)));
-                ui.set_prod_current_block(prod.current_block);
-                ui.set_prod_has_current(prod.has_current);
-                ui.set_prod_bottom_blocks(ModelRc::new(VecModel::from(prod.bottom)));
-                ui.set_prod_status(SharedString::from(prod.status));
+                ui.set_grid_rows(ModelRc::new(VecModel::from(grid_rows)));
+                ui.set_actors(ModelRc::new(VecModel::from(entries)));
+                ui.set_actor_rows(ModelRc::new(VecModel::from(actor_rows)));
             }
         }
     });
 
-    // ── character-prev-voice ──────────────────────────────────────────────
-    ui.on_character_prev_voice({
+    // ── actor-prev-voice ──────────────────────────────────────────────────────
+    ui.on_actor_prev_voice({
         let ui_weak = ui.as_weak();
         let state = state.clone();
         let handle = handle.clone();
         move |name| {
-            let (slint_chars, voice) = {
+            let (entries, voice) = {
                 let mut s = state.lock().unwrap();
                 let voice = s.prev_voice(name.as_str());
-                (s.slint_characters(), voice)
+                (s.make_actor_entries(), voice)
             };
             if let Some(ui) = ui_weak.upgrade() {
-                ui.set_characters(ModelRc::new(VecModel::from(slint_chars)));
+                ui.set_actors(ModelRc::new(VecModel::from(entries)));
             }
             spawn_preview(voice, state.clone(), handle.clone());
         }
     });
 
-    // ── character-next-voice ──────────────────────────────────────────────
-    ui.on_character_next_voice({
+    // ── actor-next-voice ──────────────────────────────────────────────────────
+    ui.on_actor_next_voice({
         let ui_weak = ui.as_weak();
         let state = state.clone();
         let handle = handle.clone();
         move |name| {
-            let (slint_chars, voice) = {
+            let (entries, voice) = {
                 let mut s = state.lock().unwrap();
                 let voice = s.next_voice(name.as_str());
-                (s.slint_characters(), voice)
+                (s.make_actor_entries(), voice)
             };
             if let Some(ui) = ui_weak.upgrade() {
-                ui.set_characters(ModelRc::new(VecModel::from(slint_chars)));
+                ui.set_actors(ModelRc::new(VecModel::from(entries)));
             }
             spawn_preview(voice, state.clone(), handle.clone());
         }
     });
 
-    // ── preview-voice ─────────────────────────────────────────────────────
+    // ── preview-voice ─────────────────────────────────────────────────────────
     ui.on_preview_voice({
         let state = state.clone();
         let handle = handle.clone();

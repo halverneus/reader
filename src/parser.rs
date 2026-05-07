@@ -1,145 +1,199 @@
-/// A single time-marked block of script content.
+use serde::Deserialize;
+
 #[derive(Debug, Clone)]
-pub struct Block {
-    pub marker: String,
-    pub character: String,
-    pub content: String,
+pub enum KeyStep {
+    Combo(String),
+    Type(String),
+    Key(String),
+    Wait(u64),
+}
+
+#[derive(Debug, Clone)]
+pub enum EventKind {
+    Line { actor: String, text: String },
+    Editor { text: String },
+    Keys { steps: Vec<KeyStep> },
+}
+
+#[derive(Debug, Clone)]
+pub struct Event {
+    pub kind: EventKind,
+    pub start: u32,
+    pub end: u32,
 }
 
 pub struct Script {
-    /// Blocks in document order (metadata header already stripped).
-    pub blocks: Vec<Block>,
-    /// Unique character names in first-appearance order.
-    pub characters: Vec<String>,
+    pub events: Vec<Event>,
+    pub actors: Vec<String>,
 }
 
-/// Parse a Kokoro script file.
-///
-/// Format rules:
-/// - Everything before the first `---` line is metadata and is ignored.
-/// - `*N*` on its own line starts a new block (N is the time marker).
-/// - `# NAME`, `## NAME`, or `### NAME` sets the current speaker.
-///   If a `*N*` block has no such line, the previous speaker carries over.
-/// - Fenced code blocks (``` … ```) are stripped from content.
-/// - A character named `IGNORE` (case-insensitive) defaults to skipped.
+// ── YAML intermediates ────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct YamlRoot {
+    script: Vec<RawEntry>,
+}
+
+#[derive(Deserialize)]
+struct RawEntry {
+    #[serde(rename = "type")]
+    entry_type: String,
+    start: u32,
+    end: u32,
+    actor: Option<String>,
+    text: Option<String>,
+    keystrokes: Option<Vec<String>>,
+}
+
 pub fn parse(input: &str) -> Script {
-    let body = strip_header(input);
+    let cleaned = strip_line_comments(input);
 
-    let mut blocks: Vec<Block> = Vec::new();
-    let mut current_marker: Option<String> = None;
-    let mut current_character = String::new();
-    let mut current_lines: Vec<&str> = Vec::new();
-    let mut in_code_block = false;
-
-    for line in body.lines() {
-        // ── Time marker ───────────────────────────────────────────────────
-        if let Some(m) = parse_marker(line.trim()) {
-            flush(&mut blocks, current_marker, &current_character, &current_lines);
-            current_marker = Some(m);
-            // Don't reset current_character — continuation blocks inherit
-            // the previous speaker (e.g. block *9* with no ### line).
-            current_lines.clear();
-            in_code_block = false;
-            continue;
+    let raw_entries: Vec<RawEntry> = {
+        // Try {script: [...]} wrapper first, then bare [...]
+        if let Ok(root) = serde_yaml::from_str::<YamlRoot>(&cleaned) {
+            root.script
+        } else if let Ok(bare) = serde_yaml::from_str::<Vec<RawEntry>>(&cleaned) {
+            bare
+        } else {
+            match serde_yaml::from_str::<serde_yaml::Value>(&cleaned) {
+                Err(e) => {
+                    eprintln!("YAML parse error: {e}");
+                    return Script { events: vec![], actors: vec![] };
+                }
+                Ok(v) => {
+                    eprintln!("YAML parsed but could not deserialize: {:?}", v);
+                    return Script { events: vec![], actors: vec![] };
+                }
+            }
         }
+    };
 
-        // Skip content before the first marker
-        if current_marker.is_none() {
-            continue;
-        }
+    let mut events = Vec::new();
+    let mut actors: Vec<String> = Vec::new();
 
-        // ── Code fence ────────────────────────────────────────────────────
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
+    for entry in raw_entries {
+        match entry.entry_type.as_str() {
+            "line" => {
+                let actor = entry.actor.unwrap_or_default();
+                let text = entry.text.unwrap_or_default().trim().to_string();
+                if !actor.is_empty() && !actors.contains(&actor) {
+                    actors.push(actor.clone());
+                }
+                events.push(Event {
+                    kind: EventKind::Line { actor, text },
+                    start: entry.start,
+                    end: entry.end,
+                });
+            }
+            "editor" => {
+                let text = entry.text.unwrap_or_default().trim().to_string();
+                events.push(Event {
+                    kind: EventKind::Editor { text },
+                    start: entry.start,
+                    end: entry.end,
+                });
+            }
+            "keys" => {
+                let steps = entry
+                    .keystrokes
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|s| parse_step(s.trim()))
+                    .collect();
+                events.push(Event {
+                    kind: EventKind::Keys { steps },
+                    start: entry.start,
+                    end: entry.end,
+                });
+            }
+            other => eprintln!("Unknown event type: {other}"),
         }
-        if in_code_block {
-            continue;
-        }
-
-        // ── Character heading ─────────────────────────────────────────────
-        if let Some(name) = parse_character(line) {
-            current_character = name;
-            continue;
-        }
-
-        // ── Regular content ───────────────────────────────────────────────
-        current_lines.push(line);
     }
 
-    flush(&mut blocks, current_marker, &current_character, &current_lines);
+    // Stable sort by start marker
+    events.sort_by_key(|e| e.start);
 
-    // Collect unique characters in order of first appearance.
-    let mut seen: Vec<String> = Vec::new();
-    for block in &blocks {
-        if !block.character.is_empty() && !seen.contains(&block.character) {
-            seen.push(block.character.clone());
-        }
-    }
+    Script { events, actors }
+}
 
-    Script {
-        blocks,
-        characters: seen,
-    }
+// ── Step display ──────────────────────────────────────────────────────────────
+
+pub fn format_steps(steps: &[KeyStep], active: Option<usize>) -> String {
+    steps
+        .iter()
+        .enumerate()
+        .map(|(i, step)| {
+            let cursor = if active == Some(i) { "▶ " } else { "  " };
+            let desc = match step {
+                KeyStep::Combo(k) => format!("[{}]", k),
+                KeyStep::Type(t) => {
+                    let lines: Vec<&str> = t.lines().collect();
+                    if lines.len() > 1 {
+                        let first = lines[0].trim();
+                        let clipped = if first.len() > 45 { &first[..45] } else { first };
+                        format!("type: {}… (+{} lines)", clipped, lines.len() - 1)
+                    } else {
+                        let s = t.trim();
+                        let clipped = if s.len() > 50 { &s[..50] } else { s };
+                        format!("type: {}{}", clipped, if s.len() > 50 { "…" } else { "" })
+                    }
+                }
+                KeyStep::Key(k) => format!("[{}]", k),
+                KeyStep::Wait(ms) => format!("wait {}ms", ms),
+            };
+            format!("{}{}", cursor, desc)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn strip_header(input: &str) -> &str {
-    // Find a line that is exactly "---" and return everything after it.
-    let mut byte_pos = 0usize;
-    for line in input.lines() {
-        byte_pos += line.len() + 1; // +1 for newline
-        if line.trim() == "---" {
-            return &input[byte_pos.min(input.len())..];
-        }
-    }
-    // No separator found — use the whole file.
+fn strip_line_comments(input: &str) -> String {
     input
+        .lines()
+        .map(|line| match find_comment_pos(line) {
+            Some(pos) => line[..pos].trim_end().to_string(),
+            None => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
-fn parse_marker(line: &str) -> Option<String> {
-    if line.len() > 2 && line.starts_with('*') && line.ends_with('*') {
-        let inner = &line[1..line.len() - 1];
-        let mut chars = inner.chars();
-        if let Some(first) = chars.next() {
-            if first.is_ascii_digit() && chars.all(|c| c.is_ascii_alphanumeric()) {
-                return Some(inner.to_string());
+fn find_comment_pos(line: &str) -> Option<usize> {
+    let mut in_single = false;
+    let mut in_double = false;
+    let b = line.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\'' if !in_double => in_single = !in_single,
+            b'"' if !in_single => in_double = !in_double,
+            b'/' if !in_single && !in_double && i + 1 < b.len() && b[i + 1] == b'/' => {
+                return Some(i);
             }
+            _ => {}
         }
+        i += 1;
     }
     None
 }
 
-fn parse_character(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    if trimmed.starts_with('#') {
-        let name = trimmed.trim_start_matches('#').trim().to_uppercase();
-        if !name.is_empty() {
-            return Some(name);
+fn parse_step(s: &str) -> KeyStep {
+    // k: is the unified keystroke prefix; c: is a legacy alias
+    let key_rest = s.strip_prefix("k:").or_else(|| s.strip_prefix("c:"));
+    if let Some(rest) = key_rest {
+        // k:ctrl+a → Combo, k:enter → Key
+        if rest.contains('+') {
+            KeyStep::Combo(rest.to_string())
+        } else {
+            KeyStep::Key(rest.to_string())
         }
+    } else if let Some(rest) = s.strip_prefix("t:") {
+        KeyStep::Type(rest.to_string())
+    } else if let Some(rest) = s.strip_prefix("w:") {
+        KeyStep::Wait(rest.trim().parse().unwrap_or(0))
+    } else {
+        KeyStep::Type(s.to_string())
     }
-    None
-}
-
-fn flush(
-    blocks: &mut Vec<Block>,
-    marker: Option<String>,
-    character: &str,
-    lines: &[&str],
-) {
-    let Some(m) = marker else { return };
-
-    let content = lines.join("\n").trim().to_string();
-
-    // Skip blocks with no readable content (e.g. sections that were all code).
-    if content.is_empty() {
-        return;
-    }
-
-    blocks.push(Block {
-        marker: m,
-        character: character.to_string(),
-        content,
-    });
 }
