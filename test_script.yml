@@ -1,0 +1,125 @@
+script:
+- type: "editor"  // Appears in the editor pane.
+  start: 0
+  end: 100
+  text: |
+    Visual Studio is open to Program.cs, which contains the following code:
+    
+    ```csharp
+    Console.WriteLine("Hello!");
+    ```
+
+- type: "line"
+  actor: "Dev"
+  start: 100
+  end: 200
+  text: "Greetings! I'm Dev the Developer!"
+
+- type: "keys"
+  start: 200
+  end: 300
+  keystrokes:
+  - "c:ctrl+a"  // Select all
+  - "t:Console.WriteLine(\"...and I'm Glitch!!!\");"  // Type text
+  - "k:enter"  // Press Enter
+  - "w:3000"  // Wait 3 seconds
+  - "c:ctrl+a"  // Select all
+  - "t:Console.WriteLine(\"Hello!\");"  // Type text
+  - "k:enter"  // Press Enter
+
+- type: "line"
+  actor: "Glitch"
+  start: 200
+  end: 300
+  text: "...and I'm Glitch!"
+
+- type: "line"
+  actor: "Dev"
+  start: 300
+  end: 400
+  text: |
+    Programs crash. It happens when the input is bad, the file
+    isn't there, or the number is too big. Today we're going to
+    look at what's actually happening when a crash occurs, how C#
+    lets you catch it before it takes down the whole program, and
+    how to respond gracefully instead of just dying. By the end,
+    something you've typed probably a hundred times is going to
+    finally make sense.
+
+- type: "editor"
+  start: 400
+  end: 500
+  text: "Roll Intro"
+
+- type: "line"
+  actor: "Dev"
+  start: 500
+  end: 600
+  text: |
+    So let me show you the problem before we show you the fix.
+    Glitch, start a new file. Just a simple number reader.
+
+- type: "keys"
+  start: 600
+  end: 800
+  keystrokes:
+  - "c:ctrl+a"  // Select all
+  - "t:Console.Write(\"Enter a number: \");"  // Type text
+  - "k:enter"  // Press Enter
+  - "t:string input = Console.ReadLine()!;"  // Type text
+  - "k:enter"  // Press Enter
+  - "t:int number = int.Parse(input);"  // Type text
+  - "k:enter"  // Press Enter
+  - "t:Console.WriteLine($\"You entered: {number}\");"  // Type text
+  - "k:enter"  // Press Enter
+
+- type: "line"
+  actor: "Glitch"
+  start: 600
+  end: 700
+  text: "Easy. User types a number, we parse it, we print it back. Done."
+
+- type: "line"
+  actor: "Dev"
+  start: 700
+  end: 800
+  text: "Run it and type hello."
+
+- type: "keys"
+  start: 800
+  end: 900
+  keystrokes:
+  - "c:f5"  // Run (F5)
+  - "w:2000"  // Wait 2 seconds
+  - "t:hello"  // Type text
+  - "k:enter"  // Press Enter
+
+- type: "line"
+  actor: "Glitch"
+  start: 900
+  end: 1000
+  text: "Okay. That's a lot of text for typing the word hello."
+
+- type: "line"
+  actor: "Dev"
+  start: 1000
+  end: 1100
+  text: |
+    That is a stack trace. Think of it as .NET's crash report.
+    Something went wrong, the program stopped, and before it
+    exited it printed an account of what happened and how we
+    got there.
+
+- type: "editor"
+  start: 1100
+  end: 1200
+  text: "Point out the stack trace in the Visual Studio UI."
+
+- type: "line"
+  actor: "Glitch"
+  start: 1100
+  end: 1200
+  text: |
+    The first line is the most readable. "System dot Format
+    Exception: Input string was not in a correct format."
+    That's describing the problem in plain language.
