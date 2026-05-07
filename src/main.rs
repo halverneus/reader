@@ -30,14 +30,7 @@ const DEFAULT_VOICE: &str = "af_bella";
 const PREVIEW_TEXT: &str =
     "Hello, this is a preview. Testing one two three. How does this voice sound to you?";
 
-// Row height estimation. Each grid row = max of the three cell heights.
-// Generous constants so min-height is rarely exceeded by actual content.
-const ACTOR_H_BASE: f32 = 46.0;  // 8+8 padding + 14 header + 16 slack
-const ACTOR_H_LINE: f32 = 24.0;  // 13px font + line spacing + buffer
-const EDITOR_H_BASE: f32 = 44.0;
-const EDITOR_H_LINE: f32 = 22.0;
-const KEYS_H_BASE: f32 = 44.0;
-const KEYS_H_STEP: f32 = 20.0;
+const PX_PER_MARKER: f32 = 2.0;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum ActorMode {
@@ -331,74 +324,16 @@ impl AppState {
             .unwrap_or(-1)
     }
 
-    // ── Height / scroll estimation ────────────────────────────────────────────
-
-    fn editor_cell_height(text: &str) -> f32 {
-        let lines = text.lines().count().max(1) as f32;
-        EDITOR_H_BASE + lines * EDITOR_H_LINE
-    }
-
-    fn actor_cell_height(text: &str) -> f32 {
-        let lines = text.lines().count().max(1) as f32;
-        ACTOR_H_BASE + lines * ACTOR_H_LINE
-    }
-
-    fn keys_cell_height(steps: &[parser::KeyStep]) -> f32 {
-        KEYS_H_BASE + steps.len().max(1) as f32 * KEYS_H_STEP
-    }
-
-    fn unified_row_height(&self, marker: u32) -> f32 {
-        let editor_h = self.events.iter()
-            .find(|e| e.start == marker && matches!(e.kind, EventKind::Editor { .. }))
-            .map(|e| if let EventKind::Editor { text } = &e.kind {
-                Self::editor_cell_height(text)
-            } else { 8.0 })
-            .unwrap_or(8.0);
-
-        let actor_h = self.events.iter()
-            .find(|e| e.start == marker && matches!(e.kind, EventKind::Line { .. }))
-            .map(|e| if let EventKind::Line { text, .. } = &e.kind {
-                Self::actor_cell_height(text)
-            } else { 8.0 })
-            .unwrap_or(8.0);
-
-        let keys_h = self.events.iter()
-            .find(|e| e.start == marker && matches!(e.kind, EventKind::Keys { .. }))
-            .map(|e| if let EventKind::Keys { steps } = &e.kind {
-                Self::keys_cell_height(steps)
-            } else { 8.0 })
-            .unwrap_or(8.0);
-
-        editor_h.max(actor_h).max(keys_h)
-    }
-
-    fn sorted_unique_markers(&self) -> Vec<u32> {
-        let mut markers: Vec<u32> = self.events.iter().map(|e| e.start).collect();
-        markers.sort_unstable();
-        markers.dedup();
-        markers
-    }
-
-    fn compute_viewport_height(&self) -> f32 {
-        let total: f32 = self.sorted_unique_markers()
-            .iter()
-            .map(|&m| self.unified_row_height(m))
-            .sum();
-        // Generous buffer so min-height rows that grow beyond estimate
-        // don't leave the bottom of the list unreachable.
-        total * 1.5 + 400.0
-    }
-
     fn compute_grid_scroll(&self) -> f32 {
         if self.prod_marker < 0 {
             return 0.0;
         }
-        let target = self.prod_marker as u32;
-        self.sorted_unique_markers()
-            .iter()
-            .take_while(|&&m| m < target)
-            .map(|&m| self.unified_row_height(m))
-            .sum()
+        self.prod_marker as f32 * PX_PER_MARKER
+    }
+
+    fn timeline_total_height(&self) -> f32 {
+        let max_marker = self.events.iter().map(|e| e.end).max().unwrap_or(0);
+        (max_marker as f32 * PX_PER_MARKER) + 800.0
     }
 
     // ── Slint model builders ──────────────────────────────────────────────────
@@ -485,9 +420,16 @@ impl AppState {
                     (false, String::new(), 0, false)
                 };
 
+            let end_marker = actor_ev
+                .map(|(_, e)| e.end)
+                .max(editor_ev.map(|(_, e)| e.end))
+                .max(keys_ev.map(|(_, e)| e.end))
+                .unwrap_or(marker + 50);
+
             rows.push(GridRow {
                 marker: marker as i32,
-                row_height: self.unified_row_height(marker) as i32,
+                end_marker: end_marker as i32,
+                row_height: 0, // No longer used for layout but kept in struct for now
                 has_actor,
                 actor_event_idx,
                 actor_name: SharedString::from(actor_name),
@@ -522,6 +464,7 @@ fn update_prod_ui(ui: &AppWindow, s: &AppState) {
     ui.set_prod_marker(s.prod_marker as i32);
     ui.set_prod_scroll(s.compute_grid_scroll());
     ui.set_prod_status(SharedString::from(s.prod_status()));
+    ui.set_timeline_height(s.timeline_total_height());
 }
 
 // ── TTS helpers ───────────────────────────────────────────────────────────────
@@ -927,11 +870,10 @@ async fn main() -> Result<()> {
                 Ok(()) => {
                     let grid_rows = s.make_grid_rows();
                     let actor_entries = s.make_actor_entries();
-                    let viewport_h = s.compute_viewport_height();
 
                     if let Some(ui) = ui_weak.upgrade() {
                         ui.set_grid_rows(ModelRc::new(VecModel::from(grid_rows)));
-                        ui.set_grid_viewport_height(viewport_h);
+                        ui.set_timeline_height(s.timeline_total_height());
                         ui.set_actors(ModelRc::new(VecModel::from(actor_entries)));
                         ui.set_playing_index(-1);
                         ui.set_prod_marker(-1);
@@ -979,13 +921,12 @@ async fn main() -> Result<()> {
             s.production_mode = !s.production_mode;
             let prod = s.production_mode;
             let grid_rows = s.make_grid_rows();
-            let viewport_h = s.compute_viewport_height();
 
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_playing_index(-1);
                 ui.set_production_mode(prod);
                 ui.set_grid_rows(ModelRc::new(VecModel::from(grid_rows)));
-                ui.set_grid_viewport_height(viewport_h);
+                ui.set_timeline_height(s.timeline_total_height());
                 update_prod_ui(&ui, &s);
             }
         }
@@ -1061,10 +1002,9 @@ async fn main() -> Result<()> {
             s.rebuild_indices();
             let grid_rows = s.make_grid_rows();
             let actor_entries = s.make_actor_entries();
-            let viewport_h = s.compute_viewport_height();
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_grid_rows(ModelRc::new(VecModel::from(grid_rows)));
-                ui.set_grid_viewport_height(viewport_h);
+                ui.set_timeline_height(s.timeline_total_height());
                 ui.set_actors(ModelRc::new(VecModel::from(actor_entries)));
             }
         }
