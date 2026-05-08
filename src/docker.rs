@@ -51,7 +51,6 @@ pub fn start() -> Result<String> {
     let output = Command::new("docker")
         .args([
             "run",
-            "--init",
             "--gpus", "all",
             "-p", "8880:8880",
             "--name", CONTAINER_NAME,
