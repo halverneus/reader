@@ -821,6 +821,14 @@ async fn main() -> Result<()> {
     println!("Starting Kokoro container…");
     docker::start()?;
 
+    // Handle Ctrl+C (SIGINT) for graceful cleanup
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.expect("Failed to listen for ctrl_c");
+        println!("\n[INFO] Received Ctrl+C, cleaning up...");
+        docker::stop();
+        std::process::exit(0);
+    });
+
     let ui = AppWindow::new()?;
     let state = Arc::new(Mutex::new(AppState::new()));
     let handle = tokio::runtime::Handle::current();

@@ -346,18 +346,9 @@ export component AppWindow inherits Window {
 
                         // Playhead line
                         if root.production-mode: Rectangle {
-                            y: 0px; height: 2px; width: parent.width;
+                            y: 0px; height: 4px; width: parent.width;
                             background: #5de8a8;
-                            opacity: 0.8;
-                        }
-                        if root.production-mode: Rectangle {
-                            y: 0px; x: 0px; height: 16px; padding: 4px;
-                            background: #5de8a8;
-                            border-radius: 2px;
-                            Text {
-                                text: "PLAYHEAD"; color: #000000;
-                                font-size: 9px; font-weight: 800;
-                            }
+                            opacity: 0.9;
                         }
                     }
                 }
