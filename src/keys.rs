@@ -28,8 +28,8 @@ pub async fn run(
 mod inner {
     use super::*;
 
-    const KEY_DELAY_MS: u64 = 2;
-    const CMD_DELAY_MS: u64 = 100;
+    const KEY_DELAY_MS: u64 = 1;
+    const CMD_DELAY_MS: u64 = 60;
 
     #[derive(Clone)]
     struct Vm {

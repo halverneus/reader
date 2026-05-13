@@ -5,6 +5,7 @@ const CONTAINER_NAME: &str = "kokoro-tts";
 const IMAGE: &str = "ghcr.io/remsky/kokoro-fastapi-gpu:latest";
 
 /// Returns the (ContainerPID, ShimPID) if the container exists.
+#[cfg(target_os = "linux")]
 fn get_container_pids() -> Option<(String, String)> {
     let output = Command::new("docker")
         .args(["inspect", "--format", "{{.State.Pid}}", CONTAINER_NAME])
@@ -37,55 +38,66 @@ fn get_container_pids() -> Option<(String, String)> {
 /// Starts the Kokoro container in detached mode and returns the container ID.
 /// If a container with the same name is already running, stops it first.
 pub fn start() -> Result<String> {
-    // Check for existing container and provide escape hatch before trying to remove it
-    if let Some((c_pid, s_pid)) = get_container_pids() {
-        println!("[INFO] Existing container found (Host PID: {c_pid}, Shim PID: {s_pid}).");
-        println!("[INFO] If startup hangs, run: sudo kill -9 {s_pid} {c_pid}");
+    #[cfg(target_os = "linux")]
+    {
+        // Check for existing container and provide escape hatch before trying to remove it
+        if let Some((c_pid, s_pid)) = get_container_pids() {
+            println!("[INFO] Existing container found (Host PID: {c_pid}, Shim PID: {s_pid}).");
+            println!("[INFO] If startup hangs, run: sudo kill -9 {s_pid} {c_pid}");
+        }
+
+        // Clean up any leftover container from a previous run.
+        let _ = Command::new("docker")
+            .args(["rm", "-f", CONTAINER_NAME])
+            .output();
+
+        let output = Command::new("docker")
+            .args([
+                "run",
+                "--gpus", "all",
+                "-p", "8880:8880",
+                "--name", CONTAINER_NAME,
+                "--rm",
+                "-d",
+                IMAGE,
+            ])
+            .output()
+            .context("Failed to run `docker run`")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Docker failed to start container: {stderr}");
+        }
+
+        let id = String::from_utf8(output.stdout)
+            .context("Docker returned non-UTF-8 container ID")?
+            .trim()
+            .to_string();
+
+        println!("Container started: {id}");
+        Ok(id)
     }
 
-    // Clean up any leftover container from a previous run.
-    let _ = Command::new("docker")
-        .args(["rm", "-f", CONTAINER_NAME])
-        .output();
-
-    let output = Command::new("docker")
-        .args([
-            "run",
-            "--gpus", "all",
-            "-p", "8880:8880",
-            "--name", CONTAINER_NAME,
-            "--rm",
-            "-d",
-            IMAGE,
-        ])
-        .output()
-        .context("Failed to run `docker run`")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Docker failed to start container: {stderr}");
+    #[cfg(not(target_os = "linux"))]
+    {
+        bail!("Docker management is Linux-only");
     }
-
-    let id = String::from_utf8(output.stdout)
-        .context("Docker returned non-UTF-8 container ID")?
-        .trim()
-        .to_string();
-
-    println!("Container started: {id}");
-    Ok(id)
 }
 
 /// Stops the container by name. Ignores errors (container may already be gone).
 pub fn stop() {
-    // Attempt a graceful stop first with a short timeout
-    let _ = Command::new("docker")
-        .args(["stop", "-t", "2", CONTAINER_NAME])
-        .status();
+    #[cfg(target_os = "linux")]
+    {
+        // Attempt a graceful stop first with a short timeout
+        let _ = Command::new("docker")
+            .args(["stop", "-t", "2", CONTAINER_NAME])
+            .status();
 
-    // Force remove just in case
-    let _ = Command::new("docker")
-        .args(["rm", "-f", CONTAINER_NAME])
-        .status();
+        // Force remove just in case
+        let _ = Command::new("docker")
+            .args(["rm", "-f", CONTAINER_NAME])
+            .status();
 
-    println!("Container stopped.");
+        println!("Container stopped.");
+    }
 }

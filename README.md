@@ -118,3 +118,41 @@ Each character can be set to:
 - **HIDE** — Line is hidden entirely (for off-screen characters)
 
 Cycle modes by clicking the READ/SKIP/HIDE badge in the sidebar.
+
+## Cross-Compiling for Windows
+
+To build a Windows executable from a Linux host, you can use either the MSVC or GNU toolchains.
+
+> **Note:** Keystroke injection (`keys` events) and TTS ("reading") are currently Linux-only. On Windows, these features will be logged but not executed.
+
+### Option 1: cargo-xwin (Recommended)
+
+This uses the MSVC toolchain and automatically handles the Windows SDK. It is generally the most reliable method for creating "native" Windows binaries.
+
+1.  Install `cargo-xwin`:
+    ```bash
+    cargo install cargo-xwin
+    ```
+2.  Add the MSVC target:
+    ```bash
+    rustup target add x86_64-pc-windows-msvc
+    ```
+3.  Build:
+    ```bash
+    cargo xwin build --release --target x86_64-pc-windows-msvc
+    ```
+
+### Option 2: GNU (MinGW)
+
+1.  Add the target:
+    ```bash
+    rustup target add x86_64-pc-windows-gnu
+    ```
+2.  Install the MinGW toolchain (e.g., on Ubuntu):
+    ```bash
+    sudo apt install mingw-w64
+    ```
+3.  Build:
+    ```bash
+    cargo build --release --target x86_64-pc-windows-gnu
+    ```

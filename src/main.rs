@@ -818,13 +818,17 @@ async fn wait_for_kokoro(ui_weak: slint::Weak<AppWindow>) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("Starting Kokoro container…");
-    docker::start()?;
+    #[cfg(target_os = "linux")]
+    {
+        println!("Starting Kokoro container…");
+        docker::start()?;
+    }
 
     // Handle Ctrl+C (SIGINT) for graceful cleanup
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.expect("Failed to listen for ctrl_c");
         println!("\n[INFO] Received Ctrl+C, cleaning up...");
+        #[cfg(target_os = "linux")]
         docker::stop();
         std::process::exit(0);
     });
@@ -833,7 +837,11 @@ async fn main() -> Result<()> {
     let state = Arc::new(Mutex::new(AppState::new()));
     let handle = tokio::runtime::Handle::current();
 
+    #[cfg(target_os = "linux")]
     handle.spawn(wait_for_kokoro(ui.as_weak()));
+
+    #[cfg(not(target_os = "linux"))]
+    ui.set_model_ready(true); // Always ready (but no-op) on non-Linux
 
     ui.set_voices(ModelRc::new(VecModel::from(
         VOICES.iter().map(|&v| SharedString::from(v)).collect::<Vec<_>>(),
@@ -1065,6 +1073,7 @@ async fn main() -> Result<()> {
     });
 
     ui.run()?;
+    #[cfg(target_os = "linux")]
     docker::stop();
     Ok(())
 }
