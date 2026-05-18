@@ -20,6 +20,7 @@ pub struct Event {
     pub kind: EventKind,
     pub start: u32,
     pub end: u32,
+    pub auto: bool,
 }
 
 pub struct Script {
@@ -43,6 +44,8 @@ struct RawEntry {
     actor: Option<String>,
     text: Option<String>,
     keystrokes: Option<Vec<String>>,
+    #[serde(default)]
+    auto: bool,
 }
 
 pub fn parse(input: &str) -> Script {
@@ -83,6 +86,7 @@ pub fn parse(input: &str) -> Script {
                     kind: EventKind::Line { actor, text },
                     start: entry.start,
                     end: entry.end,
+                    auto: entry.auto,
                 });
             }
             "editor" => {
@@ -91,6 +95,7 @@ pub fn parse(input: &str) -> Script {
                     kind: EventKind::Editor { text },
                     start: entry.start,
                     end: entry.end,
+                    auto: entry.auto,
                 });
             }
             "keys" => {
@@ -104,6 +109,7 @@ pub fn parse(input: &str) -> Script {
                     kind: EventKind::Keys { steps },
                     start: entry.start,
                     end: entry.end,
+                    auto: entry.auto,
                 });
             }
             other => eprintln!("Unknown event type: {other}"),

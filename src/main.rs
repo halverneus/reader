@@ -8,9 +8,9 @@ use anyhow::Result;
 use parser::{Event, EventKind};
 use slint::{ModelRc, SharedString, VecModel};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use tokio::sync::watch;
@@ -467,6 +467,29 @@ fn update_prod_ui(ui: &AppWindow, s: &AppState) {
     ui.set_timeline_height(s.timeline_total_height());
 }
 
+struct AutoAdvanceState {
+    pending: AtomicUsize,
+}
+
+impl AutoAdvanceState {
+    fn new(count: usize) -> Arc<Self> {
+        Arc::new(Self { pending: AtomicUsize::new(count) })
+    }
+
+    fn done(
+        &self,
+        state: Arc<Mutex<AppState>>,
+        ui_weak: slint::Weak<AppWindow>,
+        handle: tokio::runtime::Handle,
+    ) {
+        if self.pending.fetch_sub(1, Ordering::SeqCst) == 1 {
+            let _ = slint::invoke_from_event_loop(move || {
+                advance_production(state, ui_weak, handle);
+            });
+        }
+    }
+}
+
 // ── TTS helpers ───────────────────────────────────────────────────────────────
 
 fn cancel_tts(s: &mut AppState) {
@@ -482,6 +505,7 @@ fn spawn_tts_text(
     state: Arc<Mutex<AppState>>,
     ui_weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
+    auto_state: Option<Arc<AutoAdvanceState>>,
 ) {
     let cancel = {
         let mut s = state.lock().unwrap();
@@ -493,17 +517,24 @@ fn spawn_tts_text(
         ui.set_playing_index(event_idx);
     }
 
+    let handle_clone = handle.clone();
     handle.spawn(async move {
         if let Err(e) = tts::speak(text, voice, cancel).await {
             eprintln!("TTS error: {e}");
         }
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                if ui.get_playing_index() == event_idx {
-                    ui.set_playing_index(-1);
+        let _ = slint::invoke_from_event_loop({
+            let ui_weak = ui_weak.clone();
+            move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    if ui.get_playing_index() == event_idx {
+                        ui.set_playing_index(-1);
+                    }
                 }
             }
         });
+        if let Some(auto) = auto_state {
+            auto.done(state, ui_weak, handle_clone);
+        }
     });
 }
 
@@ -515,11 +546,14 @@ fn spawn_tts_deferred(
     cancel: Arc<AtomicBool>,
     ui_weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
+    state: Arc<Mutex<AppState>>,
+    auto_state: Option<Arc<AutoAdvanceState>>,
 ) {
     if let Some(ui) = ui_weak.upgrade() {
         ui.set_playing_index(event_idx);
     }
 
+    let handle_clone = handle.clone();
     handle.spawn(async move {
         if let Some(mut rx) = keys_rx {
             while !*rx.borrow() {
@@ -529,18 +563,28 @@ fn spawn_tts_deferred(
             }
         }
         if cancel.load(Ordering::Relaxed) {
+            // Even if cancelled, we must signal completion to the auto-advancer
+            if let Some(auto) = auto_state {
+                auto.done(state, ui_weak, handle_clone);
+            }
             return;
         }
         if let Err(e) = tts::speak(text, voice, cancel).await {
             eprintln!("TTS deferred error: {e}");
         }
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = ui_weak.upgrade() {
-                if ui.get_playing_index() == event_idx {
-                    ui.set_playing_index(-1);
+        let _ = slint::invoke_from_event_loop({
+            let ui_weak = ui_weak.clone();
+            move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    if ui.get_playing_index() == event_idx {
+                        ui.set_playing_index(-1);
+                    }
                 }
             }
         });
+        if let Some(auto) = auto_state {
+            auto.done(state, ui_weak, handle_clone);
+        }
     });
 }
 
@@ -566,9 +610,9 @@ fn advance_production(
 ) {
     #[derive(Clone)]
     enum Ev {
-        Line { ev_idx: usize, list_pos: i32, mode: ActorMode, text: String, voice: String },
-        Editor { list_pos: i32 },
-        Keys { ev_idx: usize, list_pos: i32, end: u32, steps: Vec<parser::KeyStep>, already: bool },
+        Line { ev_idx: usize, list_pos: i32, mode: ActorMode, text: String, voice: String, auto: bool },
+        Editor { list_pos: i32, auto: bool },
+        Keys { ev_idx: usize, list_pos: i32, end: u32, steps: Vec<parser::KeyStep>, already: bool, auto: bool },
     }
 
     let result = {
@@ -603,7 +647,7 @@ fn advance_production(
                         .unwrap_or(-1);
                     let mode = s.actor_mode_for_event(ev_idx);
                     let voice = s.voice_for_event(ev_idx);
-                    Ev::Line { ev_idx, list_pos, mode, text: text.clone(), voice }
+                    Ev::Line { ev_idx, list_pos, mode, text: text.clone(), voice, auto: ev.auto }
                 }
                 EventKind::Editor { .. } => {
                     let list_pos = s
@@ -612,7 +656,7 @@ fn advance_production(
                         .position(|&i| i == ev_idx)
                         .map(|p| p as i32)
                         .unwrap_or(-1);
-                    Ev::Editor { list_pos }
+                    Ev::Editor { list_pos, auto: ev.auto }
                 }
                 EventKind::Keys { steps } => {
                     let list_pos = s
@@ -622,17 +666,23 @@ fn advance_production(
                         .map(|p| p as i32)
                         .unwrap_or(-1);
                     let already = s.keys_triggered.contains(&ev_idx);
-                    Ev::Keys { ev_idx, list_pos, end: ev.end, steps: steps.clone(), already }
+                    Ev::Keys { ev_idx, list_pos, end: ev.end, steps: steps.clone(), already, auto: ev.auto }
                 }
             })
             .collect();
+
+        let any_auto = evs.iter().any(|ev| match ev {
+            Ev::Line { auto, .. } => *auto,
+            Ev::Editor { auto, .. } => *auto,
+            Ev::Keys { auto, .. } => *auto,
+        });
 
         let mut actor_to_speak: Option<(usize, String, String)> = None;
         let mut keys_to_run: Option<(usize, Vec<parser::KeyStep>)> = None;
 
         for ev in &evs {
             match ev {
-                Ev::Line { ev_idx, list_pos, mode, text, voice } => {
+                Ev::Line { ev_idx, list_pos, mode, text, voice, .. } => {
                     if *list_pos >= 0 {
                         s.prod_actor_list_idx = *list_pos;
                     }
@@ -640,12 +690,12 @@ fn advance_production(
                         actor_to_speak = Some((*ev_idx, text.clone(), voice.clone()));
                     }
                 }
-                Ev::Editor { list_pos } => {
+                Ev::Editor { list_pos, .. } => {
                     if *list_pos >= 0 {
                         s.prod_editor_list_idx = *list_pos;
                     }
                 }
-                Ev::Keys { ev_idx, list_pos, end, steps, already } => {
+                Ev::Keys { ev_idx, list_pos, end, steps, already, .. } => {
                     if !already {
                         s.keys_triggered.insert(*ev_idx);
                         if *list_pos >= 0 {
@@ -672,10 +722,31 @@ fn advance_production(
         let keys_rx = s.keys_done_rx.clone();
         let tts_cancel = s.tts_cancel.clone();
 
-        (actor_to_speak, actor_blocked, keys_to_run, keys_rx, tts_cancel)
+        let mut count = 0;
+        if keys_to_run.is_some() { count += 1; }
+        if actor_to_speak.is_some() { count += 1; }
+
+        let auto_state = if any_auto {
+            if count > 0 {
+                Some(AutoAdvanceState::new(count))
+            } else {
+                // Advance immediately if nothing to wait for
+                let state2 = state.clone();
+                let ui_weak2 = ui_weak.clone();
+                let handle2 = handle.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    advance_production(state2, ui_weak2, handle2);
+                });
+                None
+            }
+        } else {
+            None
+        };
+
+        (actor_to_speak, actor_blocked, keys_to_run, keys_rx, tts_cancel, auto_state)
     };
 
-    let (actor_to_speak, actor_blocked, keys_to_run, keys_rx, tts_cancel) = result;
+    let (actor_to_speak, actor_blocked, keys_to_run, keys_rx, tts_cancel, auto_state) = result;
 
     // Update UI
     {
@@ -700,6 +771,8 @@ fn advance_production(
         let ui_prog = ui_weak.clone();
         let state_done = state.clone();
         let ui_done = ui_weak.clone();
+        let handle_done = handle.clone();
+        let auto_state_done = auto_state.clone();
 
         // Progress watcher
         handle.spawn(async move {
@@ -754,6 +827,10 @@ fn advance_production(
                 }
             });
 
+            if let Some(auto) = auto_state_done {
+                auto.done(state_done, ui_done, handle_done);
+            }
+
             let _ = keys_ev_idx;
         });
     }
@@ -764,9 +841,10 @@ fn advance_production(
             spawn_tts_deferred(
                 text, voice, event_idx as i32,
                 keys_rx, tts_cancel, ui_weak, handle,
+                state, auto_state,
             );
         } else {
-            spawn_tts_text(text, voice, event_idx as i32, state, ui_weak, handle);
+            spawn_tts_text(text, voice, event_idx as i32, state, ui_weak, handle, auto_state);
         }
     }
 }
@@ -888,6 +966,27 @@ async fn main() -> Result<()> {
                     let actor_entries = s.make_actor_entries();
 
                     if let Some(ui) = ui_weak.upgrade() {
+                        let path_obj = Path::new(path.as_str());
+                        let mut title_parts = Vec::new();
+                        if let Some(parent) = path_obj.parent() {
+                            if let Some(grandparent) = parent.parent() {
+                                if let Some(gp_name) = grandparent.file_name() {
+                                    title_parts.push(gp_name.to_string_lossy().into_owned());
+                                }
+                            }
+                            title_parts.push("Lesson".to_string());
+                            if let Some(p_name) = parent.file_name() {
+                                title_parts.push(p_name.to_string_lossy().into_owned());
+                            }
+                        }
+
+                        let title = if title_parts.is_empty() {
+                            "Script Reader".to_string()
+                        } else {
+                            title_parts.join(" ")
+                        };
+                        ui.set_window_title(SharedString::from(title));
+
                         ui.set_grid_rows(ModelRc::new(VecModel::from(grid_rows)));
                         ui.set_timeline_height(s.timeline_total_height());
                         ui.set_actors(ModelRc::new(VecModel::from(actor_entries)));
@@ -987,7 +1086,7 @@ async fn main() -> Result<()> {
                 }
             };
             if mode == ActorMode::Read {
-                spawn_tts_text(text, voice, event_idx, state.clone(), ui_weak.clone(), handle.clone());
+                spawn_tts_text(text, voice, event_idx, state.clone(), ui_weak.clone(), handle.clone(), None);
             }
         }
     });

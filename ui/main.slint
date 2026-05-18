@@ -25,7 +25,8 @@ export struct ActorEntry {
 }
 
 export component AppWindow inherits Window {
-    title: "Script Reader";
+    in-out property <string> window-title: "Script Reader";
+    title: root.window-title;
     preferred-width: 1400px;
     preferred-height: 800px;
     background: #12121e;

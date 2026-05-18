@@ -91,12 +91,25 @@ script:
   keystrokes:
   - "k:f5"  // Run (F5)
 
+- type: "line"
+  actor: "Glitch"
+  start: 800
+  end: 850
+  auto: true
+  text: "Okay. It is asking for a number."
+
 - type: "keys"
   start: 850
   end: 900
   keystrokes:
   - "t:hello"  // Type text
   - "k:enter"  // Press Enter
+
+- type: "line"
+  actor: "Glitch"
+  start: 850
+  end: 900
+  text: "I typed hello and pressed enter."
 
 - type: "line"
   actor: "Glitch"

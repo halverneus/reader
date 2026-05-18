@@ -35,6 +35,8 @@ script:
 
 **Start/end markers** are arbitrary integers. Use multiples of 100 to leave room for insertions. Events at the same start marker fire in parallel.
 
+**Auto-advance**: Adding `auto: true` to an event will cause the production mode to automatically advance to the next marker once all events at the current marker (TTS and keystrokes) have finished.
+
 ## Keystroke Syntax
 
 | Prefix | Meaning | Examples |
