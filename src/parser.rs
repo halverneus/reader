@@ -6,13 +6,14 @@ pub enum KeyStep {
     Type(String),
     Key(String),
     Wait(u64),
+    Paste(String),
 }
 
 #[derive(Debug, Clone)]
 pub enum EventKind {
     Line { actor: String, text: String },
     Editor { text: String },
-    Keys { steps: Vec<KeyStep> },
+    Keys { steps: Vec<KeyStep>, speed: Option<u32> },
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +47,7 @@ struct RawEntry {
     keystrokes: Option<Vec<String>>,
     #[serde(default)]
     auto: bool,
+    speed: Option<u32>,
 }
 
 pub fn parse(input: &str) -> Script {
@@ -106,7 +108,7 @@ pub fn parse(input: &str) -> Script {
                     .map(|s| parse_step(s.trim()))
                     .collect();
                 events.push(Event {
-                    kind: EventKind::Keys { steps },
+                    kind: EventKind::Keys { steps, speed: entry.speed },
                     start: entry.start,
                     end: entry.end,
                     auto: entry.auto,
@@ -146,6 +148,11 @@ pub fn format_steps(steps: &[KeyStep], active: Option<usize>) -> String {
                 }
                 KeyStep::Key(k) => format!("[{}]", k),
                 KeyStep::Wait(ms) => format!("wait {}ms", ms),
+                KeyStep::Paste(t) => {
+                    let s = t.trim();
+                    let clipped = if s.len() > 50 { &s[..50] } else { s };
+                    format!("paste: {}{}", clipped, if s.len() > 50 { "…" } else { "" })
+                }
             };
             format!("{}{}", cursor, desc)
         })
@@ -197,6 +204,8 @@ fn parse_step(s: &str) -> KeyStep {
         }
     } else if let Some(rest) = s.strip_prefix("t:") {
         KeyStep::Type(rest.to_string())
+    } else if let Some(rest) = s.strip_prefix("p:") {
+        KeyStep::Paste(rest.to_string())
     } else if let Some(rest) = s.strip_prefix("w:") {
         KeyStep::Wait(rest.trim().parse().unwrap_or(0))
     } else {

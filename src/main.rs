@@ -410,7 +410,7 @@ impl AppState {
 
             let (has_keys, keys_display, keys_end_marker, keys_active) =
                 if let Some((idx, ev)) = keys_ev {
-                    if let EventKind::Keys { steps } = &ev.kind {
+                    if let EventKind::Keys { steps, .. } = &ev.kind {
                         let active = self.keys_triggered.contains(&idx);
                         (true, parser::format_steps(steps, None), ev.end as i32, active)
                     } else {
@@ -425,6 +425,10 @@ impl AppState {
                 .max(editor_ev.map(|(_, e)| e.end))
                 .max(keys_ev.map(|(_, e)| e.end))
                 .unwrap_or(marker + 50);
+
+            let is_auto = actor_ev.map(|(_, e)| e.auto).unwrap_or(false)
+                || editor_ev.map(|(_, e)| e.auto).unwrap_or(false)
+                || keys_ev.map(|(_, e)| e.auto).unwrap_or(false);
 
             rows.push(GridRow {
                 marker: marker as i32,
@@ -442,6 +446,7 @@ impl AppState {
                 keys_display: SharedString::from(keys_display),
                 keys_end_marker,
                 keys_active,
+                is_auto,
             });
         }
         rows
@@ -612,7 +617,7 @@ fn advance_production(
     enum Ev {
         Line { ev_idx: usize, list_pos: i32, mode: ActorMode, text: String, voice: String, auto: bool },
         Editor { list_pos: i32, auto: bool },
-        Keys { ev_idx: usize, list_pos: i32, end: u32, steps: Vec<parser::KeyStep>, already: bool, auto: bool },
+        Keys { ev_idx: usize, list_pos: i32, end: u32, steps: Vec<parser::KeyStep>, speed: Option<u32>, already: bool, auto: bool },
     }
 
     let result = {
@@ -658,7 +663,7 @@ fn advance_production(
                         .unwrap_or(-1);
                     Ev::Editor { list_pos, auto: ev.auto }
                 }
-                EventKind::Keys { steps } => {
+                EventKind::Keys { steps, speed } => {
                     let list_pos = s
                         .keys_indices
                         .iter()
@@ -666,7 +671,7 @@ fn advance_production(
                         .map(|p| p as i32)
                         .unwrap_or(-1);
                     let already = s.keys_triggered.contains(&ev_idx);
-                    Ev::Keys { ev_idx, list_pos, end: ev.end, steps: steps.clone(), already, auto: ev.auto }
+                    Ev::Keys { ev_idx, list_pos, end: ev.end, steps: steps.clone(), speed: *speed, already, auto: ev.auto }
                 }
             })
             .collect();
@@ -678,7 +683,7 @@ fn advance_production(
         });
 
         let mut actor_to_speak: Option<(usize, String, String)> = None;
-        let mut keys_to_run: Option<(usize, Vec<parser::KeyStep>)> = None;
+        let mut keys_to_run: Option<(usize, Vec<parser::KeyStep>, Option<u32>)> = None;
 
         for ev in &evs {
             match ev {
@@ -695,7 +700,7 @@ fn advance_production(
                         s.prod_editor_list_idx = *list_pos;
                     }
                 }
-                Ev::Keys { ev_idx, list_pos, end, steps, already, .. } => {
+                Ev::Keys { ev_idx, list_pos, end, steps, speed, already, .. } => {
                     if !already {
                         s.keys_triggered.insert(*ev_idx);
                         if *list_pos >= 0 {
@@ -706,7 +711,7 @@ fn advance_production(
                         let (tx, rx) = watch::channel(false);
                         s.keys_done_tx = Some(tx);
                         s.keys_done_rx = Some(rx);
-                        keys_to_run = Some((*ev_idx, steps.clone()));
+                        keys_to_run = Some((*ev_idx, steps.clone(), *speed));
                     }
                 }
             }
@@ -757,7 +762,7 @@ fn advance_production(
     }
 
     // Start keystroke task
-    if let Some((keys_ev_idx, steps)) = keys_to_run {
+    if let Some((keys_ev_idx, steps, speed)) = keys_to_run {
         let (progress_tx, progress_rx) = watch::channel(0usize);
         let keys_cancel = {
             let mut s = state.lock().unwrap();
@@ -786,7 +791,7 @@ fn advance_production(
                     let s = state_prog.lock().unwrap();
                     s.prod_keys_ev_idx()
                         .and_then(|ev_idx| {
-                            if let EventKind::Keys { steps } = &s.events[ev_idx].kind {
+                            if let EventKind::Keys { steps, .. } = &s.events[ev_idx].kind {
                                 Some(parser::format_steps(steps, Some(step)))
                             } else {
                                 None
@@ -808,7 +813,7 @@ fn advance_production(
 
         // Keys execution
         handle.spawn(async move {
-            keys::run(steps, progress_tx, keys_cancel).await;
+            keys::run(steps, speed, progress_tx, keys_cancel).await;
 
             {
                 let mut s = state_done.lock().unwrap();

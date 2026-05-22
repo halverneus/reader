@@ -16,6 +16,7 @@ export struct GridRow {
     keys-display: string,
     keys-end-marker: int,
     keys-active: bool,
+    is-auto: bool,
 }
 
 export struct ActorEntry {
@@ -182,6 +183,20 @@ export component AppWindow inherits Window {
 
                                     HorizontalLayout {
                                         spacing: 0px; padding: 0px;
+
+                                        // Auto-advance indicator
+                                        Rectangle {
+                                            width: row.is-auto ? 14px : 0px;
+                                            clip: true;
+                                            background: row.is-auto ? #131a14 : transparent;
+                                            Text {
+                                                text: "▼";
+                                                color: #5de8a8;
+                                                font-size: 9px;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
 
                                         // ── Editor cell ───────────────────────────────
                                         Rectangle {

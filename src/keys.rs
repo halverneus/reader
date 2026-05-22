@@ -9,15 +9,16 @@ use crate::parser::KeyStep;
 /// Send keystrokes to the VM.  No-op on non-Linux.
 pub async fn run(
     steps: Vec<KeyStep>,
+    speed: Option<u32>,
     progress_tx: watch::Sender<usize>,
     cancel: Arc<AtomicBool>,
 ) {
     #[cfg(target_os = "linux")]
-    inner::run(steps, progress_tx, cancel).await;
+    inner::run(steps, speed, progress_tx, cancel).await;
 
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (steps, progress_tx, cancel);
+        let _ = (steps, speed, progress_tx, cancel);
         eprintln!("[keys] Keystroke execution is Linux-only");
     }
 }
@@ -28,8 +29,21 @@ pub async fn run(
 mod inner {
     use super::*;
 
-    const KEY_DELAY_MS: u64 = 1;
-    const CMD_DELAY_MS: u64 = 60;
+    fn get_delays(speed: u32) -> (u64, u64) {
+        match speed {
+            1 => (100, 500),
+            2 => (80, 400),
+            3 => (60, 300),
+            4 => (40, 200),
+            5 => (20, 100),
+            6 => (10, 60),
+            7 => (5, 40),
+            8 => (2, 20),
+            9 => (1, 10),
+            10 => (0, 0), // Burst
+            _ => (1, 10),  // Default to 9
+        }
+    }
 
     #[derive(Clone)]
     struct Vm {
@@ -39,6 +53,7 @@ mod inner {
 
     pub async fn run(
         steps: Vec<KeyStep>,
+        speed: Option<u32>,
         progress_tx: watch::Sender<usize>,
         cancel: Arc<AtomicBool>,
     ) {
@@ -49,6 +64,9 @@ mod inner {
                 return;
             }
         };
+
+        let speed_val = speed.unwrap_or(9).clamp(1, 10);
+        let (_, cmd_delay) = get_delays(speed_val);
 
         for (i, step) in steps.iter().enumerate() {
             if cancel.load(Ordering::Relaxed) {
@@ -64,16 +82,20 @@ mod inner {
                     tokio::task::spawn_blocking(move || send_combo(&vm2, &parts))
                         .await
                         .ok();
-                    tokio::time::sleep(std::time::Duration::from_millis(CMD_DELAY_MS)).await;
+                    if cmd_delay > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(cmd_delay)).await;
+                    }
                 }
                 KeyStep::Type(text) => {
                     let vm2 = vm.clone();
                     let text2 = text.clone();
                     let cancel2 = cancel.clone();
-                    tokio::task::spawn_blocking(move || type_text(&vm2, &text2, &cancel2))
+                    tokio::task::spawn_blocking(move || type_text(&vm2, &text2, speed_val, &cancel2))
                         .await
                         .ok();
-                    tokio::time::sleep(std::time::Duration::from_millis(CMD_DELAY_MS)).await;
+                    if cmd_delay > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(cmd_delay)).await;
+                    }
                 }
                 KeyStep::Key(key) => {
                     let vm2 = vm.clone();
@@ -81,7 +103,19 @@ mod inner {
                     tokio::task::spawn_blocking(move || send_key(&vm2, &qc, false))
                         .await
                         .ok();
-                    tokio::time::sleep(std::time::Duration::from_millis(CMD_DELAY_MS)).await;
+                    if cmd_delay > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(cmd_delay)).await;
+                    }
+                }
+                KeyStep::Paste(text) => {
+                    let vm2 = vm.clone();
+                    let text2 = text.clone();
+                    tokio::task::spawn_blocking(move || paste_text(&vm2, &text2))
+                        .await
+                        .ok();
+                    if cmd_delay > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(cmd_delay)).await;
+                    }
                 }
                 KeyStep::Wait(ms) => {
                     tokio::time::sleep(std::time::Duration::from_millis(*ms)).await;
@@ -145,45 +179,110 @@ mod inner {
             .output();
     }
 
+    fn send_key_events(vm: &Vm, events: Vec<serde_json::Value>) {
+        if events.is_empty() {
+            return;
+        }
+        let json = serde_json::json!({
+            "execute": "input-send-event",
+            "arguments": {
+                "events": events
+            }
+        });
+        virsh_qmp(vm, &json.to_string());
+    }
+
+    fn make_key_event(qcode: &str, down: bool) -> serde_json::Value {
+        serde_json::json!({
+            "type": "key",
+            "data": {
+                "down": down,
+                "key": {
+                    "type": "qcode",
+                    "data": qcode
+                }
+            }
+        })
+    }
+
     fn send_key(vm: &Vm, key: &str, shift: bool) {
-        let keys_json = if shift {
-            format!(
-                r#"[{{"type":"qcode","data":"shift"}},{{"type":"qcode","data":"{key}"}}]"#
-            )
-        } else {
-            format!(r#"[{{"type":"qcode","data":"{key}"}}]"#)
-        };
-        virsh_qmp(
-            vm,
-            &format!(r#"{{"execute":"send-key","arguments":{{"keys":{keys_json}}}}}"#),
-        );
-        std::thread::sleep(std::time::Duration::from_millis(KEY_DELAY_MS));
+        let mut events = Vec::new();
+        if shift {
+            events.push(make_key_event("shift", true));
+        }
+        events.push(make_key_event(key, true));
+        events.push(make_key_event(key, false));
+        if shift {
+            events.push(make_key_event("shift", false));
+        }
+        send_key_events(vm, events);
     }
 
     fn send_combo(vm: &Vm, keys: &[String]) {
-        let parts = keys
-            .iter()
-            .map(|k| {
-                let q = key_to_qcode(k);
-                format!(r#"{{"type":"qcode","data":"{q}"}}"#)
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        virsh_qmp(
-            vm,
-            &format!(r#"{{"execute":"send-key","arguments":{{"keys":[{parts}]}}}}"#),
-        );
-        std::thread::sleep(std::time::Duration::from_millis(CMD_DELAY_MS));
+        let mut events = Vec::new();
+        let qcodes: Vec<String> = keys.iter().map(|k| key_to_qcode(k)).collect();
+
+        // All down
+        for qc in &qcodes {
+            events.push(make_key_event(qc, true));
+        }
+        // All up (reverse order)
+        for qc in qcodes.iter().rev() {
+            events.push(make_key_event(qc, false));
+        }
+        send_key_events(vm, events);
     }
 
-    fn type_text(vm: &Vm, text: &str, cancel: &Arc<AtomicBool>) {
-        for ch in text.chars() {
-            if cancel.load(Ordering::Relaxed) {
-                break;
+    fn paste_text(vm: &Vm, text: &str) {
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            if cb.set_text(text.to_string()).is_ok() {
+                // Wait a tiny bit for clipboard to settle
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                // Send Ctrl+V
+                send_combo(vm, &["ctrl".to_string(), "v".to_string()]);
             }
-            match char_to_qcode(ch) {
-                Some((shift, key)) => send_key(vm, &key, shift),
-                None => eprintln!("[keys] No qcode for {:?}", ch),
+        } else {
+            eprintln!("[keys] Failed to access host clipboard");
+        }
+    }
+
+    fn type_text(vm: &Vm, text: &str, speed: u32, cancel: &Arc<AtomicBool>) {
+        let (key_delay, _) = get_delays(speed);
+
+        if speed >= 10 {
+            // Burst mode: Send everything in one huge batch
+            let mut events = Vec::new();
+            for ch in text.chars() {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                if let Some((shift, key)) = char_to_qcode(ch) {
+                    if shift {
+                        events.push(make_key_event("shift", true));
+                    }
+                    events.push(make_key_event(&key, true));
+                    events.push(make_key_event(&key, false));
+                    if shift {
+                        events.push(make_key_event("shift", false));
+                    }
+                }
+            }
+            send_key_events(vm, events);
+        } else {
+            // Normal mode: Send character by character with delays
+            for ch in text.chars() {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                match char_to_qcode(ch) {
+                    Some((shift, key)) => {
+                        send_key(vm, &key, shift);
+                        if key_delay > 0 {
+                            std::thread::sleep(std::time::Duration::from_millis(key_delay));
+                        }
+                    }
+                    None => eprintln!("[keys] No qcode for {:?}", ch),
+                }
             }
         }
     }
