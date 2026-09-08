@@ -28,6 +28,7 @@ pub async fn run(
 #[cfg(target_os = "linux")]
 mod inner {
     use super::*;
+    use std::io::Write;
 
     fn get_delays(speed: u32) -> (u64, u64) {
         match speed {
@@ -108,11 +109,14 @@ mod inner {
                     }
                 }
                 KeyStep::Paste(text) => {
-                    let vm2 = vm.clone();
                     let text2 = text.clone();
-                    tokio::task::spawn_blocking(move || paste_text(&vm2, &text2))
-                        .await
-                        .ok();
+                    println!("[keys] Copying to host clipboard: {} chars", text2.len());
+                    
+                    // Simple, reliable wl-copy. No foreground, no wait, no arboard override.
+                    tokio::task::spawn_blocking(move || {
+                        set_host_clipboard_reliable(text2);
+                    }).await.ok();
+
                     if cmd_delay > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(cmd_delay)).await;
                     }
@@ -120,6 +124,47 @@ mod inner {
                 KeyStep::Wait(ms) => {
                     tokio::time::sleep(std::time::Duration::from_millis(*ms)).await;
                 }
+            }
+        }
+    }
+
+    /// The most basic and reliable way to set host clipboard on Wayland/X11.
+    fn set_host_clipboard_reliable(text: String) {
+        let wayland = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+        let mut success = false;
+
+        if !wayland.is_empty() {
+            // Set standard selection
+            let _ = std::process::Command::new("wl-copy")
+                .arg("-n")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .map(|mut child| {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        let _ = stdin.write_all(text.as_bytes());
+                    }
+                    let _ = child.wait();
+                });
+
+            // Set primary selection
+            let _ = std::process::Command::new("wl-copy")
+                .args(["-n", "-p"])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .map(|mut child| {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        let _ = stdin.write_all(text.as_bytes());
+                    }
+                    let _ = child.wait();
+                });
+            
+            success = true;
+        }
+
+        // Only use arboard if wl-copy wasn't available
+        if !success {
+            if let Ok(mut cb) = arboard::Clipboard::new() {
+                let _ = cb.set_text(text);
             }
         }
     }
@@ -132,7 +177,9 @@ mod inner {
             format!(
                 "/run/user/{uid}/.flatpak/org.gnome.Boxes/xdg-run/libvirt/virtqemud-sock"
             ),
-            format!("/run/user/{uid}/libvirt/virtqemud-sock"),
+            format!(
+                "/run/user/{uid}/libvirt/virtqemud-sock"
+            ),
         ];
         for sock in &candidates {
             if !std::path::Path::new(sock).exists() {
@@ -231,19 +278,6 @@ mod inner {
             events.push(make_key_event(qc, false));
         }
         send_key_events(vm, events);
-    }
-
-    fn paste_text(vm: &Vm, text: &str) {
-        if let Ok(mut cb) = arboard::Clipboard::new() {
-            if cb.set_text(text.to_string()).is_ok() {
-                // Wait a tiny bit for clipboard to settle
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                // Send Ctrl+V
-                send_combo(vm, &["ctrl".to_string(), "v".to_string()]);
-            }
-        } else {
-            eprintln!("[keys] Failed to access host clipboard");
-        }
     }
 
     fn type_text(vm: &Vm, text: &str, speed: u32, cancel: &Arc<AtomicBool>) {

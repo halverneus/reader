@@ -151,7 +151,7 @@ pub fn format_steps(steps: &[KeyStep], active: Option<usize>) -> String {
                 KeyStep::Paste(t) => {
                     let s = t.trim();
                     let clipped = if s.len() > 50 { &s[..50] } else { s };
-                    format!("paste: {}{}", clipped, if s.len() > 50 { "…" } else { "" })
+                    format!("COPY TO CLIPBOARD: {}{}", clipped, if s.len() > 50 { "…" } else { "" })
                 }
             };
             format!("{}{}", cursor, desc)

@@ -1,0 +1,41 @@
+{
+  "name": "metrik-studio",
+  "productName": "Metrik Studio",
+  "version": "0.1.0",
+  "description": "Script, rehearse, record, and cut Metrik Rule videos with Glitch.",
+  "main": "dist/main/index.js",
+  "author": "Jeromy Streets",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs && electron . --ozone-platform-hint=auto",
+    "start": "electron . --ozone-platform-hint=auto",
+    "dist": "node build.mjs && electron-builder --linux AppImage"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-yaml": "^6.1.3",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.4",
+    "@codemirror/view": "^6.43.11",
+    "@types/js-yaml": "^4.0.9",
+    "@types/ws": "^8.18.1",
+    "js-yaml": "^4.3.2",
+    "obs-websocket-js": "^5.0.8",
+    "preact": "^10.29.8",
+    "ws": "^8.21.3"
+  },
+  "desktopName": "metrik-studio.desktop"
+}

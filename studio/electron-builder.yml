@@ -1,0 +1,21 @@
+appId: dev.halverneus.metrik-studio
+productName: Metrik Studio
+directories:
+  output: release
+files:
+  - dist/**
+  - package.json
+extraResources:
+  - from: docker
+    to: docker
+linux:
+  syncDesktopName: true
+  target:
+    - AppImage
+  category: AudioVideo
+  icon: build/icon.png
+  artifactName: MetrikStudio-${version}.AppImage
+  desktop:
+    entry:
+      Name: Metrik Studio
+      Comment: Script, rehearse, record, and cut Metrik Rule videos with Glitch

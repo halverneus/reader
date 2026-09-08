@@ -1,5 +1,9 @@
 # Script Reader
 
+> **Superseded by [Metrik Studio](studio/README.md)** (Electron): Glitch's animated face, OBS-driven recording with
+> previews/meters/AI matting, the Claude script assistant, and Kdenlive project generation. The Rust/Slint reader below
+> still builds and reads the same `Script.yml` files (it ignores the new `face`/`slide` entries and `mood` fields).
+
 A Rust/Slint teleprompter for recording educational coding videos. Reads YAML scripts with actor dialogue, editor notes, and VM keystroke sequences.
 
 ## Script Format
@@ -24,9 +28,11 @@ script:
   - type: "keys"
     start: 200
     end: 400
+    speed: 10              # 1 (slow) to 10 (burst). Default is 10.
     keystrokes:
       - "k:ctrl+a"         # select all
-      - "t:some code here" # type text
+      - "t:some code here" # type text (char by char)
+      - "p:large block"    # copy to host clipboard (manual paste)
       - "k:enter"          # press Enter
       - "w:2000"           # wait 2 seconds
 ```
@@ -44,7 +50,16 @@ script:
 | `k:key` | Press a single key | `k:enter`, `k:tab`, `k:escape` |
 | `k:mod+key` | Key combo (use `+` to combine) | `k:ctrl+a`, `k:ctrl+shift+p`, `k:alt+f4` |
 | `t:text` | Type a string character by character | `t:Hello, world!` |
+| `p:text` | **Copy-Only**: Prep clipboard for manual paste | `p:long block of code...` |
 | `w:ms` | Wait in milliseconds | `w:1000` (1 second), `w:500` |
+
+### Performance Tips
+
+- **Type (`t:`)**: Best for short commands or visible typing animations.
+- **Copy (`p:`)**: Best for large code blocks. The text is copied to your host clipboard so you can manually `Ctrl+V` it into the guest VM. This bypasses guest keyboard buffer limits and is 100% reliable.
+
+The `keys` event supports an optional `speed` field (1-10). Default is 10 (Burst Mode).
+
 
 Multi-line text blocks work with YAML block scalars:
 ```yaml
