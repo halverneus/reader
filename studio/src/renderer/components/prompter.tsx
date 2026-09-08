@@ -10,8 +10,14 @@ export function Prompter() {
   const p = useProduction();
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const now = box.current?.querySelector(".mrow.now") as HTMLElement | null;
-    if (now && box.current) box.current.scrollTo({ top: Math.max(0, now.offsetTop - 16), behavior: "smooth" });
+    const body = box.current;
+    const now = body?.querySelector(".mrow.now") as HTMLElement | null;
+    if (!now || !body) return;
+    // Measure against the scroll box, not offsetTop: the row's offsetParent is the page (nothing in the
+    // chain is positioned), so offsetTop also counts the topbar and the column header and scrolls too far,
+    // hiding the first line of the row behind the header.
+    const top = body.scrollTop + now.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    body.scrollTo({ top: Math.max(0, top - 16), behavior: "smooth" });
   }, [p.marker]);
   const ms = markers(script);
   return (
