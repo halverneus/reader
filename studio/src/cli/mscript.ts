@@ -24,7 +24,7 @@ kinds and their json fields:
   line     {"actor":"Dev|Glitch","text":"…","mood":"curious"?,"auto":true?}
   editor   {"text":"…"}
   keys     {"keystrokes":["k:ctrl+a","t:code","m:click"],"speed":1-10?}
-  face     {"mood":"malice","hold":800?}
+  face     {"mood":"malice","delay":2000?,"hold":800?}   delay = wait before the face changes; hold = revert after
   slide    {"actor":"Dev|Glitch","to":"left|right|top|bottom|hide|show","over":600?}
   outro    {"next":"Dictionaries","thanks":["Nicole"],"phases":[{"phase":"next","text":"…","mood":"deception"}]?}
 Inline [mood] tags inside any text switch Glitch's face mid-line. Lines ≤ 70 chars. Every text line must be speakable.
@@ -103,7 +103,7 @@ function main(argv: string[]) {
       if (kind === "line") e = { ...base, type: "line", actor: d.actor === "Glitch" ? "Glitch" : "Dev", text: String(d.text ?? "").trim(), mood: d.mood || undefined };
       else if (kind === "editor") e = { ...base, type: "editor", text: String(d.text ?? "").trim() };
       else if (kind === "keys") e = { ...base, type: "keys", keystrokes: d.keystrokes ?? [], speed: d.speed };
-      else if (kind === "face") e = { ...base, type: "face", mood: d.mood ?? "neutral", hold: d.hold };
+      else if (kind === "face") e = { ...base, type: "face", mood: d.mood ?? "neutral", hold: d.hold, delay: d.delay };
       else if (kind === "slide") e = { ...base, type: "slide", actor: d.actor === "Glitch" ? "Glitch" : "Dev", to: d.to ?? "left", over: d.over };
       else if (kind === "outro") e = { ...base, type: "outro", next: d.next || undefined, thanks: d.thanks ?? undefined, phases: d.phases ?? undefined };
       else throw new Error("unknown kind " + kind);

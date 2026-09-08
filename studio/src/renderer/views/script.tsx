@@ -137,7 +137,8 @@ function Cell({ e }: { e: Entry }) {
           <div class="meta"><span class="muted" style="font-size:11px">speed</span><input type="number" min={1} max={10} style="width:56px" value={e.speed ?? 10} onChange={(ev: any) => patch({ speed: +ev.currentTarget.value } as any)} /><span class="muted" style="font-size:11px">one step per line · k: t: p: w: m:</span></div></>}
         {e.type === "face" && <div class="meta">
           <select value={e.mood} onChange={(ev: any) => patch({ mood: ev.currentTarget.value } as any)}>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
-          <span class="muted" style="font-size:11px">hold ms</span><input type="number" style="width:80px" value={e.hold ?? 0} onChange={(ev: any) => patch({ hold: +ev.currentTarget.value || undefined } as any)} /></div>}
+          <span class="muted" style="font-size:11px" title="wait this long after the marker before the face changes">delay ms</span><input type="number" min={0} step={100} style="width:80px" value={e.delay ?? 0} onChange={(ev: any) => patch({ delay: +ev.currentTarget.value || undefined } as any)} />
+          <span class="muted" style="font-size:11px" title="hold the face this long, then go back to the previous one">hold ms</span><input type="number" min={0} step={100} style="width:80px" value={e.hold ?? 0} onChange={(ev: any) => patch({ hold: +ev.currentTarget.value || undefined } as any)} /></div>}
         {e.type === "outro" && <OutroCell e={e} patch={patch} />}
         {e.type === "slide" && <div class="meta">
           <select value={e.actor} onChange={(ev: any) => patch({ actor: ev.currentTarget.value } as any)}><option>Dev</option><option>Glitch</option></select>

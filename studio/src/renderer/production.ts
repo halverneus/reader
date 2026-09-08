@@ -24,6 +24,7 @@ class Production {
   private recStart = 0;
   private sessionDir: string | null = null;
   private lineCounter = 0;
+  private keepAlive: AudioContext | null = null;
 
   subscribe(f: () => void) { this.subs.add(f); return () => { this.subs.delete(f); }; }
   private emit() { for (const f of this.subs) f(); }
@@ -89,7 +90,15 @@ class Production {
     let lineToSpeak: Entry | null = null;
 
     for (const e of evs) {
-      if (e.type === "face") { glitch.setMood(e.mood, e.hold); this.log("mood", { mood: e.mood, hold: e.hold ?? 0 }); }
+      if (e.type === "face") {
+        const fire = () => { glitch.setMood(e.mood, e.hold); this.log("mood", { mood: e.mood, hold: e.hold ?? 0 }); };
+        if (e.delay && e.delay > 0) {
+          // Late reaction: hold the current face until `delay` has passed — e.g. Glitch keeps a straight
+          // face while Dev reads the line that catches him out. The log records when it actually fired,
+          // so the post render follows the same beat.
+          waits.push(new Promise<void>((resolve) => this.cueTimers.push(window.setTimeout(() => { fire(); resolve(); }, e.delay))));
+        } else fire();
+      }
       else if (e.type === "slide") {
         if (e.actor === "Glitch") glitch.slide(e.to as any, e.over ?? 600);
         else this.set({ devPos: e.to === "hide" ? "hidden" : e.to === "left" ? "left" : "home" });
@@ -171,6 +180,7 @@ class Production {
     const voice = cfg?.voices?.[e.actor] ?? "am_puck";
     const text = cleanText(e.text);
     const name = `${String(++this.lineCounter).padStart(4, "0")}-${e.actor}-${e.start}`;
+    this.wakeAudio(); // before the synth round-trip, so the sink is up by the time we play
     this.set({ speakingId: e.id });
     let res: { audio: string; path?: string; duration?: number };
     try { res = await window.studio.invoke("tts:speak", { text, voice, name, save: this.st.recording }); }
@@ -179,17 +189,37 @@ class Production {
     await new Promise<void>((resolve) => {
       const a = new Audio("data:audio/wav;base64," + res.audio);
       this.audio = a;
-      a.onloadedmetadata = () => {
+      // Log when sound actually starts, not when metadata decodes: post places this wav at the logged
+      // timestamp, so it has to match the moment the room heard it.
+      let started = false;
+      const onStart = () => {
+        if (started) return; started = true;
         const dur = isFinite(a.duration) ? a.duration * 1000 : (res.duration ?? 3000);
         this.log("line-start", { entryId: e.id, actor: e.actor, text, spoken: true, audio: res.path, duration: dur });
         if (e.actor === "Glitch") glitch.setTalking(true);
         this.scheduleCues(e.text, dur);
       };
-      a.onended = () => { glitch.setTalking(false); this.log("line-end", { entryId: e.id }); if (this.audio === a) { this.audio = null; this.set({ speakingId: null }); } resolve(); };
+      a.onplaying = onStart;
+      a.onended = () => { onStart(); glitch.setTalking(false); this.log("line-end", { entryId: e.id }); if (this.audio === a) { this.audio = null; this.set({ speakingId: null }); } resolve(); };
       a.onerror = () => { glitch.setTalking(false); resolve(); };
       a.onpause = () => { if (a.ended) return; resolve(); };
-      a.play().catch(() => resolve());
+      a.play().then(onStart).catch(() => resolve());
     });
+  }
+
+  /** Hold the audio sink open. WirePlumber suspends an idle node after 5s, and resuming an ALSA sink
+   *  swallows the first couple hundred ms of the stream — while Kokoro's wavs open with only ~45ms of
+   *  silence, so Glitch's first word gets clipped in the room after any pause. An inaudible tone keeps
+   *  the node running. (The saved wav is intact and the cut is built from it, so this is monitoring only.) */
+  private wakeAudio() {
+    try {
+      if (this.keepAlive) { if (this.keepAlive.state === "suspended") this.keepAlive.resume(); return; }
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.frequency.value = 30; g.gain.value = 0.0001; // -80 dB: below the noise floor, but a real signal
+      osc.connect(g).connect(ctx.destination); osc.start();
+      this.keepAlive = ctx;
+    } catch { /* no audio device: playback will fail loudly enough on its own */ }
   }
 
   setSendKeys(v: boolean) { this.set({ sendKeys: v }); }
@@ -204,6 +234,7 @@ class Production {
     try {
       const r = await window.studio.invoke("session:start", { scriptPath });
       this.sessionDir = r.dir; this.recStart = r.startedAt;
+      this.wakeAudio();
       this.lineCounter = 0;
       this.set({ recording: true, take: 1 });
       this.log("session-start", { scriptPath, marker: this.st.marker });

@@ -57,7 +57,7 @@ function Talk({ e, p }: { e: Entry; p: any }) {
       <div class="who"><span class={"chip " + e.actor}>{e.actor}</span>{e.mood && <span class="chip face">{e.mood}</span>}</div>
       <div class="txt">{splitMoodTags(e.text).segments.map((sg) => <>{sg.mood && <span class="tag">[{sg.mood}] </span>}{sg.text}</>)}</div>
     </div>);
-  if (e.type === "face") return <div class="pitem face"><span class="chip face">face</span> <span class="muted">Glitch → {e.mood}{e.hold ? ` for ${e.hold} ms` : ""}</span></div>;
+  if (e.type === "face") return <div class="pitem face"><span class="chip face">face</span> <span class="muted">{e.delay ? `after ${e.delay} ms, ` : ""}Glitch → {e.mood}{e.hold ? ` for ${e.hold} ms` : ""}</span></div>;
   if (e.type === "slide") return <div class="pitem slide"><span class="chip slide">slide</span> <span class="muted">{e.actor} → {e.to}</span></div>;
   if (e.type === "outro") return (
     <div class="pitem outro"><div class="who"><span class="chip outro">outro</span></div>
