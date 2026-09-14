@@ -1,6 +1,7 @@
 // Keystrokes and mouse into the GNOME Boxes VM through libvirt QMP (input-send-event). Port of keys.rs + mouse.
 import { ipcMain } from "electron";
 import { execFile, execFileSync } from "node:child_process";
+import fs from "node:fs";
 import { loadConfig } from "./config";
 import { parseStep, KeyStep } from "../shared/script";
 import { broadcast } from "./index";
@@ -8,9 +9,13 @@ import { broadcast } from "./index";
 interface Vm { uri: string; domain: string }
 let cancelFlag = { v: false };
 
+// GNOME Boxes (flatpak) runs its own virtqemud inside the sandbox; plain qemu:///session reaches the host daemon instead
+const BOXES_SOCKET = `/run/user/${process.getuid?.() ?? 1000}/.flatpak/org.gnome.Boxes/xdg-run/libvirt/virtqemud-sock`;
+
 export function findVm(): Vm | null {
   const cfg = loadConfig().vm;
-  const uris = cfg.uri ? [cfg.uri, "qemu:///session", "qemu:///system"] : ["qemu:///session", "qemu:///system"];
+  const boxes = fs.existsSync(BOXES_SOCKET) ? [`qemu+unix:///session?socket=${BOXES_SOCKET}`] : [];
+  const uris = [...(cfg.uri ? [cfg.uri] : []), ...boxes, "qemu:///session", "qemu:///system"];
   for (const uri of [...new Set(uris)]) {
     try {
       const out = execFileSync("virsh", ["-c", uri, "list", "--name"], { encoding: "utf8", timeout: 4000 });

@@ -30,7 +30,7 @@ export async function renderGlitch(dir: string, session: any, log: Log): Promise
   log(`[glitch] ${total} frames @ ${fps} fps, ${cues.length} cues\n`);
 
   const win = new BrowserWindow({ show: false, width: 1920, height: 1080, webPreferences: { backgroundThrottling: false } });
-  await win.loadFile(path.join(__dirname, "../renderer/glitch.html"), { query: { manual: "1", seed: String(cfg.glitch.seed), y: String(cfg.glitch.homeY) } });
+  await win.loadFile(path.join(__dirname, "../renderer/glitch.html"), { query: { manual: "1", seed: String(cfg.glitch.seed), y: String(cfg.glitch.homeY), size: String(cfg.glitch.size ?? 1) } });
 
   let ffErr = "";
   const ff = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "png", "-i", "-", "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-row-mt", "1", "-threads", "8", "-speed", "3", "-b:v", "0", "-crf", "24", out]);

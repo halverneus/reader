@@ -19,3 +19,20 @@ export async function ffprobeJson(file: string): Promise<any> {
   return JSON.parse(out);
 }
 export async function durationOf(file: string): Promise<number> { const j = await ffprobeJson(file); return parseFloat(j.format?.duration ?? "0"); }
+/** 100 ms RMS levels of an audio file as [seconds, dBFS] (silence → −120). */
+export function rmsEnvelope(file: string): Promise<[number, number][]> {
+  return new Promise((resolve) => {
+    const p = spawn("ffmpeg", ["-hide_banner", "-nostats", "-i", file, "-af", "aresample=48000,asetnsamples=n=4800,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level", "-f", "null", "-"]);
+    let err = ""; p.stderr.on("data", (d) => (err += d)); p.on("error", () => resolve([]));
+    p.on("close", () => {
+      const frames: [number, number][] = []; let t = 0;
+      for (const line of err.split("\n")) {
+        const pt = line.match(/pts_time:(-?[\d.]+)/); if (pt) t = +pt[1];
+        const lv = line.match(/RMS_level=(-?[\d.]+|-inf)/); if (lv) frames.push([t, lv[1] === "-inf" ? -120 : +lv[1]]);
+      }
+      resolve(frames);
+    });
+  });
+}
+/** Level (dBFS) below which the quietest `p` of 100 ms windows fall — the recording's noise floor at p = 0.1. */
+export const percentileDb = (frames: [number, number][], p: number) => { const s = frames.map(([, v]) => v).sort((a, b) => a - b); return s.length ? s[Math.floor(s.length * p)] : -60; };

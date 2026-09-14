@@ -7,6 +7,7 @@ import { registerTtsIpc, pollKokoro, startKokoroContainer, stopKokoroContainer, 
 import { registerVmIpc } from "./vm";
 import { registerSessionIpc, stopSession } from "./session";
 import { registerObsIpc, obs } from "./obs";
+import { registerCaptureIpc, capture } from "./capture";
 import { registerAssistIpc } from "./assist";
 import { registerPostIpc } from "./post";
 import { registerDiagnoseIpc } from "./diagnose";
@@ -70,7 +71,15 @@ async function headless(): Promise<boolean> {
 app.whenReady().then(async () => {
   if (await headless()) return;
   ipcMain.handle("config:get", () => loadConfig());
-  ipcMain.handle("config:set", (_e, patch) => saveConfig(patch));
+  ipcMain.handle("config:set", async (_e, patch) => {
+    const before = loadConfig().capture.backend;
+    const cfg = saveConfig(patch);
+    const cap = patch?.capture;
+    if (cap && cfg.capture.backend !== before) { if (cfg.capture.backend === "obs") await capture.quit(false); else capture.start(); }
+    // the key only drives the preview + Kdenlive; anything else changes the pipelines
+    else if (cap && cfg.capture.backend === "gstreamer" && Object.keys(cap).some((k) => k !== "key")) capture.reconfigure();
+    return cfg;
+  });
   ipcMain.handle("dialog:openFile", async (_e, opts) => {
     const r = await dialog.showOpenDialog(win!, { properties: ["openFile"], filters: opts?.filters, defaultPath: opts?.defaultPath });
     return r.canceled ? null : r.filePaths[0];
@@ -83,20 +92,31 @@ app.whenReady().then(async () => {
   ipcMain.handle("fs:exists", (_e, p) => fs.existsSync(p));
   ipcMain.handle("outro:preview", () => { const w = new BrowserWindow({ width: 1280, height: 720, title: "Outro preview", backgroundColor: "#04070f", useContentSize: true }); w.setMenuBarVisibility(false); w.loadFile(path.join(__dirname, "../renderer/outro.html"), { query: { preview: "1" } }); w.webContents.on("did-finish-load", () => w.webContents.insertCSS("html,body{width:100%;height:100%}#stage{transform:scale(calc(100vw / 1920));transform-origin:0 0}")); });
   ipcMain.handle("config:get:override", () => process.env.STUDIO_OPEN ?? null);
-  registerScriptIpc(); registerTtsIpc(); registerVmIpc(); registerSessionIpc(); registerObsIpc(); registerAssistIpc(); registerPostIpc(); registerDiagnoseIpc();
+  registerScriptIpc(); registerTtsIpc(); registerVmIpc(); registerSessionIpc(); registerObsIpc(); registerCaptureIpc(); registerAssistIpc(); registerPostIpc(); registerDiagnoseIpc();
   createWindow();
 
-  // Background services: Kokoro TTS container + OBS connection attempts
+  // Background services: Kokoro TTS container + the capture engine (or OBS connection attempts on the legacy backend)
   const cfg = loadConfig();
+  if (cfg.capture.backend === "obs") obs.connect(); else capture.start();
   if ((await pollKokoro()) !== "ready" && cfg.kokoro.autoStart) startKokoroContainer();
   setInterval(() => { pollKokoro(); }, 3000);
-  setInterval(() => { if (!obs.connected) obs.connect(); else obs.pushStatus(); }, 4000);
-  obs.connect();
+  setInterval(() => { if (loadConfig().capture.backend !== "obs") return; if (!obs.connected) obs.connect(); else obs.pushStatus(); }, 4000);
 
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("window-all-closed", () => { if (!headlessMode) app.quit(); });
-app.on("before-quit", async () => { await stopSession().catch(() => {}); if (loadConfig().kokoro.autoStart) stopKokoroContainer(); });
+// hold the quit until a running recording is stopped and its files are finalised
+let quitReady = false;
+app.on("before-quit", (e) => {
+  if (quitReady) return;
+  e.preventDefault();
+  (async () => {
+    await stopSession().catch(() => {});
+    await capture.quit().catch(() => {});
+    if (loadConfig().kokoro.autoStart) stopKokoroContainer();
+    quitReady = true; app.quit();
+  })();
+});
 
 export const mainWindow = () => win;
 export function broadcast(channel: string, payload: any) { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send(channel, payload); }

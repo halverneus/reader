@@ -242,7 +242,7 @@ class Production {
     } catch (e: any) { toast(`Record: ${e.message}`, "error"); }
   }
   async stopRecording() {
-    try { await window.studio.invoke("session:stop"); } catch (e: any) { toast(`Stop: ${e.message}`, "error"); }
+    try { await window.studio.invoke("session:stop"); toast("Recording saved — Post tab → Run everything builds the Kdenlive project", "ok"); } catch (e: any) { toast(`Stop: ${e.message}`, "error"); }
     this.log("session-stop");
     this.set({ recording: false });
     this.sessionDir = null;

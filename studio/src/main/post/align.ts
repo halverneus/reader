@@ -21,6 +21,12 @@ async function envelope(file: string, seconds: number): Promise<Float32Array> {
 }
 
 export async function alignCam(dir: string, session: any, log: Log): Promise<string> {
+  if (session.meta?.capture?.backend === "gstreamer") {
+    // recorded on one clock: the offsets were measured at record time
+    const m = session.meta, msg = `clock-synced: cam ${(m.camOffset ?? 0).toFixed(3)} s, mic ${(m.micOffset ?? 0).toFixed(3)} s`;
+    log(`[align] ${msg}\n`);
+    return msg;
+  }
   const cam = findCam(dir), desk = findDesktop(dir);
   if (!cam || !desk) { log("[align] need both cam*.mkv and desktop*.mkv; skipping (offset = 0)\n"); return "skipped"; }
   const a = await envelope(desk, 120), b = await envelope(cam, 120);

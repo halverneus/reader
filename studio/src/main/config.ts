@@ -11,13 +11,30 @@ export interface Config {
   kdenliveTemplate: string;
   projectsDir: string;
   obs: { host: string; port: number; password: string; camDevice: string; micDevice: string };
+  capture: {
+    backend: "gstreamer" | "obs";
+    desktopMode: "portal" | "test" | "node"; desktopTarget: string; restoreToken: string;
+    width: number; height: number; fps: number; desktopKbps: number;
+    camDevice: string; camWidth: number; camHeight: number; camFps: number; camKbps: number;
+    micDevice: string;
+    key: { enabled: boolean; color: string; similarity: number; smoothness: number; spill: number };
+  };
+  /** autoRender: Run everything also renders the project to an MP4 in renderDir */
+  post: { autoRender: boolean; renderDir: string };
+  /** denoise: build mic-clean.flac in post and edit with it (raw mic.flac is always kept) */
+  audio: { denoise: boolean };
+  /** course code from the script path (e.g. "CS235") → folder/name used for recordings and projects (e.g. "MySQL") */
+  courseFolders: Record<string, string>;
+  /** course folder name → branding thumbnail file chosen last for that course */
+  courseThumbnails: Record<string, string>;
   voices: Record<string, string>;
   actorModes: Record<string, "read" | "skip" | "hide">;
   anthropicApiKey: string;
   model: string;
   vm: { uri: string; domain: string; width: number; height: number };
   kokoro: { url: string; autoStart: boolean; image: string };
-  glitch: { homeY: number; seed: number; scale: number };
+  /** size: Glitch's arm + head relative to the original design (0.75 since 2026-09-13). `scale` is unused. */
+  glitch: { homeY: number; seed: number; scale: number; size: number };
   dev: { rect: { x: number; y: number; w: number; h: number }; leftX: number };
 }
 
@@ -29,13 +46,25 @@ export const DEFAULTS: Config = {
   kdenliveTemplate: path.join(home, "Videos/Projects/Csharp/Bare Template.kdenlive"),
   projectsDir: path.join(home, "Videos/Projects"),
   obs: { host: "127.0.0.1", port: 4455, password: "", camDevice: "/dev/video3", micDevice: "" },
+  capture: {
+    backend: "gstreamer",
+    desktopMode: "portal", desktopTarget: "", restoreToken: "",
+    width: 1920, height: 1080, fps: 60, desktopKbps: 16000,
+    camDevice: "/dev/video3", camWidth: 1920, camHeight: 1080, camFps: 30, camKbps: 12000,
+    micDevice: "",
+    key: { enabled: true, color: "#00ff01", similarity: 0.4, smoothness: 0.08, spill: 0.5 },
+  },
+  post: { autoRender: false, renderDir: path.join(home, "Videos") },
+  audio: { denoise: true },
+  courseFolders: { CS235: "MySQL" },
+  courseThumbnails: {},
   voices: { Glitch: "am_puck", Dev: "bf_alice" },
   actorModes: { Dev: "skip", Glitch: "read" },
   anthropicApiKey: "",
   model: "claude-opus-5",
   vm: { uri: "qemu:///session", domain: "", width: 1920, height: 1080 },
   kokoro: { url: "http://localhost:8880", autoStart: true, image: "ghcr.io/remsky/kokoro-fastapi-gpu:latest" },
-  glitch: { homeY: 300, seed: 7, scale: 1 },
+  glitch: { homeY: 300, seed: 7, scale: 1, size: 0.75 },
   dev: { rect: { x: 1152, y: 648, w: 768, h: 432 }, leftX: 0 },
 };
 
@@ -46,6 +75,8 @@ export function loadConfig(): Config {
   if (cache) return cache;
   let c: any = {};
   try { c = JSON.parse(fs.readFileSync(file(), "utf8")); } catch {}
+  // devices chosen back when OBS did the capturing carry over
+  if (c.obs && !c.capture) c.capture = { camDevice: c.obs.camDevice || DEFAULTS.capture.camDevice, micDevice: c.obs.micDevice ?? "" };
   // migrate the old reader config's voices if present
   try {
     const old = JSON.parse(fs.readFileSync(path.join(home, ".config/reader/config.json"), "utf8"));

@@ -8,6 +8,12 @@ files:
 extraResources:
   - from: docker
     to: docker
+  - from: models
+    to: models
+  - from: recorder
+    to: recorder
+    filter:
+      - "*.py"
 linux:
   syncDesktopName: true
   target:

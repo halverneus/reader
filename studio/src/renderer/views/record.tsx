@@ -26,7 +26,7 @@ export function RecordView() {
       <aside class="side">
         <GlitchStage devPos={p.devPos} />
         <MoodPalette compact />
-        <Sources />
+        <Sources devPos={p.devPos} />
       </aside>
       <div class="transport">
         {p.recording ? <><span class="rec-dot" /><span class="chip" style="border-color:#e74c3c;color:#e74c3c">REC</span></> : <span class="chip">REHEARSAL</span>}

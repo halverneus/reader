@@ -1,8 +1,8 @@
 // Standalone Glitch page: used by the offline renderer (deterministic stepping) and as an OBS browser source if wanted.
 import { Vex, GlitchDriver } from "../../glitch/vex";
 const svg = document.getElementById("glitch") as unknown as SVGSVGElement;
-const vex = new Vex(svg);
 const q = new URLSearchParams(location.search);
+const vex = new Vex(svg, { size: parseFloat(q.get("size") ?? "1") });
 const driver = new GlitchDriver(parseInt(q.get("seed") ?? "7"));
 if (q.get("y")) driver.slide(parseFloat(q.get("y")!), 1);
 let manual = q.get("manual") === "1"; // offline renderer steps frames itself

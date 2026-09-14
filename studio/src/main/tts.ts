@@ -10,9 +10,15 @@ const PREVIEW = "Hello, this is a preview. Testing one two three. How does this 
 export let kokoroState: "down" | "starting" | "ready" = "down";
 export let kokoroStartedByUs = false;
 
+// Pronunciation override, e.g. [Raquel](/ɹəkˈɛl/). Kokoro's text normaliser reads the markup aloud, so it is switched
+// off for lines that use one (measured: 4.6 s of noise vs 2.5 s spoken correctly). Spell out numbers in those lines.
+const PRONOUNCE_RE = /\[[^\]\n]+\]\(\/[^)\n]+\/\)/;
+
 async function synth(text: string, voice: string): Promise<Buffer> {
   const url = loadConfig().kokoro.url.replace(/\/$/, "") + "/v1/audio/speech";
-  const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "kokoro", voice, input: text, response_format: "wav" }) });
+  const body: any = { model: "kokoro", voice, input: text, response_format: "wav" };
+  if (PRONOUNCE_RE.test(text)) body.normalization_options = { normalize: false };
+  const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(`Kokoro ${r.status}: ${(await r.text()).slice(0, 200)}`);
   return Buffer.from(await r.arrayBuffer());
 }

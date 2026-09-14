@@ -72,30 +72,33 @@ function defs(svg: SVGSVGElement) {
 export const LAYOUT = { W: 1920, H: 1080, mountX: 0, homeY: 300, topY: 230, bottomY: 830, headX: 250, reachPx: 140, hideX: -320, L1: 150, L2: 150 };
 
 export class Vex {
-  private rig: SVGElement; private mount: SVGElement; private seg1: SVGElement; private seg2: SVGElement; private elbow: SVGElement; private wrist: SVGElement;
+  private rig: SVGElement; private arm: SVGElement; private size = 1; private mount: SVGElement; private seg1: SVGElement; private seg2: SVGElement; private elbow: SVGElement; private wrist: SVGElement;
   private head: SVGElement; private finL: SVGElement; private finR: SVGElement; private finGlow: SVGElement[]; private crest: SVGElement; private eyeL; private eyeR; private mouthShape: SVGElement; private mouthLine: SVGElement; private neckLight: SVGElement; private headInner: SVGElement;
-  constructor(public svg: SVGSVGElement | SVGGElement) {
+  /** size scales the mount, arm and head about the mount point (the wall rail stays full height). */
+  constructor(public svg: SVGSVGElement | SVGGElement, opts: { size?: number } = {}) {
+    this.size = opts.size && opts.size > 0 ? opts.size : 1;
     if (svg.tagName.toLowerCase() === "svg") svg.setAttribute("viewBox", `0 0 ${LAYOUT.W} ${LAYOUT.H}`);
     defs(svg as SVGSVGElement);
     this.rig = el("g", {}, svg);
     // wall rail + mount (slim)
     el("rect", { x: 0, y: 0, width: 12, height: LAYOUT.H, fill: "url(#gx-metalH)", opacity: .9 }, this.rig);
     for (let y = 30; y < LAYOUT.H; y += 60) el("rect", { x: 3, y, width: 6, height: 10, rx: 2, fill: "#171a26" }, this.rig);
-    this.mount = el("g", {}, this.rig);
+    this.arm = el("g", {}, this.rig);
+    this.mount = el("g", {}, this.arm);
     el("rect", { x: 0, y: -34, width: 30, height: 68, rx: 6, fill: "#3a3f55", stroke: "#5a6280", "stroke-width": 2 }, this.mount);
     el("circle", { cx: 22, cy: 0, r: 13, fill: "#4a5068", stroke: "#1a1d2e", "stroke-width": 3 }, this.mount);
     // arm segments (drawn as thick rounded lines with a darker core = robo-dog arm look)
-    this.seg1 = el("g", {}, this.rig); this.seg2 = el("g", {}, this.rig);
+    this.seg1 = el("g", {}, this.arm); this.seg2 = el("g", {}, this.arm);
     for (const seg of [this.seg1, this.seg2]) {
       el("line", { x1: 0, y1: 0, x2: 1, y2: 0, stroke: "#2a2f40", "stroke-width": 26, "stroke-linecap": "round", class: "bone" }, seg);
       el("line", { x1: 0, y1: 0, x2: 1, y2: 0, stroke: "#4a5068", "stroke-width": 16, "stroke-linecap": "round", class: "bone" }, seg);
       el("line", { x1: 0, y1: 0, x2: 1, y2: 0, stroke: "#171a26", "stroke-width": 4, "stroke-dasharray": "10 14", class: "bone" }, seg);
     }
-    this.elbow = el("g", {}, this.rig); el("circle", { r: 17, fill: "#3a3f55", stroke: "#5a6280", "stroke-width": 2 }, this.elbow); el("circle", { r: 6, fill: "#171a26" }, this.elbow);
-    this.wrist = el("g", {}, this.rig); el("circle", { r: 14, fill: "#3a3f55", stroke: "#5a6280", "stroke-width": 2 }, this.wrist);
+    this.elbow = el("g", {}, this.arm); el("circle", { r: 17, fill: "#3a3f55", stroke: "#5a6280", "stroke-width": 2 }, this.elbow); el("circle", { r: 6, fill: "#171a26" }, this.elbow);
+    this.wrist = el("g", {}, this.arm); el("circle", { r: 14, fill: "#3a3f55", stroke: "#5a6280", "stroke-width": 2 }, this.wrist);
     this.neckLight = el("circle", { r: 5, filter: "url(#gx-glow)" }, this.wrist);
     // head
-    this.head = el("g", {}, this.rig);
+    this.head = el("g", {}, this.arm);
     this.headInner = el("g", {}, this.head);
     const h = this.headInner;
     el("rect", { x: -16, y: 60, width: 32, height: 50, rx: 6, fill: "#252a38" }, h); // neck stub
@@ -129,6 +132,7 @@ export class Vex {
     // mount follows head y loosely (it slides on the rail)
     const my = baseY + 40;
     this.mount.setAttribute("transform", `translate(0,${my})`);
+    if (this.size !== 1) this.arm.setAttribute("transform", `translate(0,${my}) scale(${this.size}) translate(0,${-my})`);
     // 2-bone IK from shoulder (22,my) to wrist (hx-100, hy+70) with elbow bent up
     const sx = 22, sy = my, wx = hx - 96 + shake * .3, wy = hy + 62;
     let dx = wx - sx, dy = wy - sy; let d = Math.hypot(dx, dy);

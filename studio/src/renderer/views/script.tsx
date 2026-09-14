@@ -7,7 +7,7 @@ import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { useStore, toast } from "../store";
 import { loadScriptFile, saveScript, setScriptText, updateScript, createScript } from "../script-io";
-import { Entry, markers, entriesAt, markerBetween, newId, validate, STEP_HELP, outroPhases, OUTRO_PHASES } from "../../shared/script";
+import { Entry, markers, entriesAt, markerBetween, newId, validate, STEP_HELP, outroPhases, OUTRO_PHASES, cleanText } from "../../shared/script";
 import { MOOD_NAMES } from "../../../glitch/moods";
 import type { ScriptFileInfo } from "../../shared/ipc";
 import { Assist } from "../components/assist";
@@ -127,6 +127,7 @@ function Cell({ e }: { e: Entry }) {
         {e.type === "line" && <>
           <textarea value={e.text} rows={Math.max(1, e.text.split("\n").length)} onInput={(ev: any) => patch({ text: ev.currentTarget.value } as any)} placeholder="Dialogue. Inline cues like [curious] change Glitch's face mid-line." />
           <div class="meta">
+            {e.actor === "Glitch" && <SayButton text={e.text} actor="Glitch" />}
             <select value={e.actor} onChange={(ev: any) => patch({ actor: ev.currentTarget.value } as any)}><option>Dev</option><option>Glitch</option></select>
             <select value={e.mood ?? ""} onChange={(ev: any) => patch({ mood: ev.currentTarget.value || undefined } as any)}><option value="">mood: (keep)</option>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
             {e.text.split("\n").some((l) => l.length > 70) && <span class="mono" style="color:var(--rose);font-size:11px">line &gt; 70 chars</span>}
@@ -150,6 +151,44 @@ function Cell({ e }: { e: Entry }) {
   );
 }
 
+// one preview at a time across the whole script
+let previewAudio: HTMLAudioElement | null = null;
+let previewStop: (() => void) | null = null;
+
+/** Hear a line the way it will be spoken while recording: same voice, same [mood]-tag clean-up. Nothing is saved. */
+function SayButton({ text, actor }: { text: string; actor: string }) {
+  const { config } = useStore();
+  const [st, setSt] = useState<"idle" | "loading" | "playing">("idle");
+  const token = useRef(0);
+  const clean = cleanText(text ?? "");
+  const stop = () => { token.current++; previewAudio?.pause(); previewAudio = null; previewStop = null; setSt("idle"); };
+  useEffect(() => () => { if (previewStop === stop) stop(); }, []);
+  const click = async () => {
+    if (st !== "idle") return stop();
+    previewStop?.(); // silence any other line that's playing
+    const my = ++token.current; previewStop = stop; setSt("loading");
+    try {
+      const r = await window.studio.invoke("tts:speak", { text: clean, voice: config?.voices?.[actor] ?? "am_puck", name: "preview", save: false });
+      if (token.current !== my) return;
+      const a = new Audio("data:audio/wav;base64," + r.audio);
+      previewAudio = a; a.onended = () => { if (token.current === my) stop(); };
+      await a.play(); setSt("playing");
+    } catch (err: any) { if (token.current === my) { stop(); toast(`Kokoro: ${err.message}`, "error"); } }
+  };
+  const color = st === "playing" ? "var(--teal)" : st === "loading" ? "var(--amber)" : "currentColor";
+  return (
+    <button class="btn sm" disabled={!clean} onClick={click} style="padding:2px 6px;display:inline-flex;align-items:center"
+      title={st === "idle" ? `Hear how ${actor} says this line` : "Stop"}>
+      <svg width="22" height="14" viewBox="0 0 34 20" fill="none" stroke={color} stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style={st === "loading" ? "opacity:.6" : ""}>
+        <path d="M2 10 C5 4 10 3 12 5.5 C14 3 19 4 22 10 C19 16 5 16 2 10 Z" />
+        <path d="M5.5 10 C9 11.8 15 11.8 18.5 10" />
+        <path d="M26 6 Q28.5 10 26 14" opacity={st === "idle" ? 0.55 : 1} />
+        <path d="M29.5 3 Q33.5 10 29.5 17" opacity={st === "playing" ? 1 : 0.3} />
+      </svg>
+    </button>
+  );
+}
+
 function OutroCell({ e, patch }: { e: Entry & { type: "outro" }; patch: (p: any) => void }) {
   const phases = outroPhases(e);
   const setPhase = (name: string, field: string, value: string) => {
@@ -164,6 +203,7 @@ function OutroCell({ e, patch }: { e: Entry & { type: "outro" }; patch: (p: any)
         <div class="meta" style="align-items:flex-start;margin-top:6px" key={ph.phase}>
           <span class="chip face" style="margin-top:6px;min-width:76px;text-align:center">{ph.phase}</span>
           <textarea style="flex:1;min-height:34px" value={ph.text} rows={Math.max(1, ph.text.split("\n").length)} onChange={(ev: any) => setPhase(ph.phase, "text", ev.currentTarget.value)} title="What Glitch says during this phase. Inline [mood] tags allowed." />
+          <SayButton text={ph.text} actor="Glitch" />
           <select value={ph.mood} onChange={(ev: any) => setPhase(ph.phase, "mood", ev.currentTarget.value)}>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
         </div>
       ))}

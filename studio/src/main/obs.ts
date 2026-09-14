@@ -75,7 +75,7 @@ class Obs {
       if (!j.server_enabled) { j.server_enabled = true; j.first_load = false; fs.writeFileSync(cfgFile, JSON.stringify(j, null, 2)); }
       if (j.server_password && !loadConfig().obs.password) loadConfig().obs.password = j.server_password;
     } catch {}
-    const child = spawn("flatpak", ["run", "com.obsproject.Studio"], { detached: true, stdio: "ignore" }); child.unref();
+    const child = spawn("flatpak", ["run", "com.obsproject.Studio", "--minimize-to-tray"], { detached: true, stdio: "ignore" }); child.unref();
     this.message = "Launching OBS…"; this.pushStatus();
   }
 
@@ -168,9 +168,13 @@ class Obs {
   private async poll() {
     if (!this.connected) return;
     const inputs: any = await this.ws.call("GetInputList");
-    const names: string[] = inputs.inputs.map((i: any) => i.inputName);
-    const video = inputs.inputs.filter((i: any) => ["pipewire-screen-capture-source", "v4l2_input", "browser_source", "window_capture", "xshm_input"].includes(i.inputKind));
-    const audio = inputs.inputs.filter((i: any) => ["pulse_input_capture", "pulse_output_capture", "pipewire-audio-capture-source", "alsa_input_capture"].includes(i.inputKind));
+    // only show what the Metrik scene records; other OBS scenes' sources are just noise here
+    const items: any = await this.ws.call("GetSceneItemList", { sceneName: SCENE }).catch(() => ({ sceneItems: [] }));
+    const inScene = new Set<string>(items.sceneItems.map((i: any) => i.sourceName));
+    const pool = inScene.size ? inputs.inputs.filter((i: any) => inScene.has(i.inputName)) : inputs.inputs;
+    const names: string[] = pool.map((i: any) => i.inputName);
+    const video = pool.filter((i: any) => ["pipewire-screen-capture-source", "v4l2_input", "browser_source", "window_capture", "xshm_input"].includes(i.inputKind));
+    const audio = pool.filter((i: any) => ["pulse_input_capture", "pulse_output_capture", "pipewire-audio-capture-source", "alsa_input_capture"].includes(i.inputKind));
     for (const k of [...this.sources.keys()]) if (!names.includes(k)) this.sources.delete(k);
     for (const v of video) {
       try {
