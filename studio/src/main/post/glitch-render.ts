@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../config";
+import { talkCues } from "../../shared/script";
 import type { Log } from "./pipeline";
 
 export async function renderGlitch(dir: string, session: any, log: Log): Promise<string> {
@@ -22,7 +23,7 @@ export async function renderGlitch(dir: string, session: any, log: Log): Promise
     const t = (e.t - t0) / 1000;
     if (e.kind === "mood") cues.push({ t, mood: e.mood, hold: e.hold });
     else if (e.kind === "slide" && e.actor === "Glitch") cues.push({ t, slide: e.to, over: e.over });
-    else if (e.kind === "line-start" && e.actor === "Glitch" && e.spoken) { cues.push({ t, talk: true }); if (e.duration) cues.push({ t: t + e.duration / 1000, talk: false }); }
+    else if (e.kind === "line-start" && e.actor === "Glitch" && e.spoken) cues.push(...talkCues(t, e));
     else if (e.kind === "line-end" && e.actor === "Glitch") cues.push({ t, talk: false });
     else if (e.kind === "reset") cues.push({ t, mood: "neutral", slide: "show", y: cfg.glitch.homeY });
   }

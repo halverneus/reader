@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../config";
+import { talkCues } from "../../shared/script";
 import { ffmpeg } from "./exec";
 import type { Log } from "./pipeline";
 
@@ -36,7 +37,7 @@ export async function renderOutro(dir: string, session: any, log: Log): Promise<
   for (const e of session.events) {
     const t = (e.t - t0abs) / 1000; if (t < 0 || t > total) continue;
     if (e.kind === "mood") cues.push({ t, mood: e.mood, hold: e.hold });
-    else if (e.kind === "line-start" && e.actor === "Glitch" && e.spoken) { cues.push({ t, talk: true }); if (e.duration) cues.push({ t: t + e.duration / 1000, talk: false }); }
+    else if (e.kind === "line-start" && e.actor === "Glitch" && e.spoken) cues.push(...talkCues(t, e));
     else if (e.kind === "line-end" && e.actor === "Glitch") cues.push({ t, talk: false });
   }
   cues.sort((a, b) => a.t - b.t);

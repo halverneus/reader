@@ -1,7 +1,7 @@
 // Production engine: drives the prompter, TTS, keystrokes, Glitch moods/slides, and the take/event log.
 // Semantics ported from the Rust reader (advance/rewind/auto/keys blocking) and extended.
 import { useEffect, useState } from "preact/hooks";
-import { Entry, entriesAt, nextMarker, splitMoodTags, cleanText, outroPhases } from "../shared/script";
+import { Entry, entriesAt, nextMarker, splitMoodTags, cleanText, outroPhases, timeAtChar, speechGaps, SpeechSpan } from "../shared/script";
 import { getState, toast } from "./store";
 import { glitch } from "./components/glitch-stage";
 
@@ -133,7 +133,8 @@ class Production {
       } else {
         this.log("line-start", { entryId: e.id, actor: e.actor, text: cleanText(e.text), spoken: false });
         // Dev reads on camera: fire inline mood cues spread over an estimated reading time (~14 chars/sec)
-        this.scheduleCues(e.text, Math.max(1500, cleanText(e.text).length / 14 * 1000));
+        const { clean, pauses } = splitMoodTags(e.text);
+        this.scheduleCues(e.text, Math.max(1500, clean.length / 14 * 1000) + pauses.reduce((n, p) => n + p.ms, 0));
       }
     }
 
@@ -167,11 +168,20 @@ class Production {
   }
   private outroToken = 0;
 
-  private scheduleCues(text: string, durationMs: number) {
-    const { clean, cues } = splitMoodTags(text);
-    for (const c of cues) {
-      const at = clean.length ? (c.charIndex / clean.length) * durationMs : 0;
-      this.cueTimers.push(window.setTimeout(() => { glitch.setMood(c.mood); this.log("mood", { mood: c.mood }); }, at));
+  /** Inline mood cues (and, for Glitch, the mouth closing over [pause]s) timed against the spoken spans. Without
+   *  spans (Dev reads on camera) the line is estimated at ~14 chars/sec, with its pauses added in. */
+  private scheduleCues(text: string, durationMs: number, spans?: SpeechSpan[], talking = false) {
+    const { clean, cues, pauses } = splitMoodTags(text);
+    if (!spans) {
+      const pauseMs = pauses.reduce((n, p) => n + p.ms, 0), perChar = Math.max(0, durationMs - pauseMs) / Math.max(1, clean.length);
+      const at = (i: number, before = false) => i * perChar + pauses.filter((p) => p.charIndex < i || (!before && p.charIndex === i)).reduce((n, p) => n + p.ms, 0);
+      for (const c of cues) this.cueTimers.push(window.setTimeout(() => { glitch.setMood(c.mood); this.log("mood", { mood: c.mood }); }, at(c.charIndex, c.beforePause)));
+      return;
+    }
+    for (const c of cues) this.cueTimers.push(window.setTimeout(() => { glitch.setMood(c.mood); this.log("mood", { mood: c.mood }); }, timeAtChar(spans!, c.charIndex, c.beforePause)));
+    if (talking) for (const [a, b] of speechGaps(spans, durationMs)) {
+      this.cueTimers.push(window.setTimeout(() => glitch.setTalking(false), a));
+      if (b < durationMs) this.cueTimers.push(window.setTimeout(() => { if (this.audio) glitch.setTalking(true); }, b));
     }
   }
 
@@ -182,8 +192,9 @@ class Production {
     const name = `${String(++this.lineCounter).padStart(4, "0")}-${e.actor}-${e.start}`;
     this.wakeAudio(); // before the synth round-trip, so the sink is up by the time we play
     this.set({ speakingId: e.id });
-    let res: { audio: string; path?: string; duration?: number };
-    try { res = await window.studio.invoke("tts:speak", { text, voice, name, save: this.st.recording }); }
+    let res: { audio: string; path?: string; duration?: number; spans?: SpeechSpan[] };
+    // raw text: main strips the mood tags and splices in the [pause]s
+    try { res = await window.studio.invoke("tts:speak", { text: e.text, voice, name, save: this.st.recording }); }
     catch (err: any) { toast(`TTS: ${err.message}`, "error"); this.set({ speakingId: null }); return; }
     if (this.st.speakingId !== e.id) return; // cancelled meanwhile
     await new Promise<void>((resolve) => {
@@ -195,9 +206,11 @@ class Production {
       const onStart = () => {
         if (started) return; started = true;
         const dur = isFinite(a.duration) ? a.duration * 1000 : (res.duration ?? 3000);
-        this.log("line-start", { entryId: e.id, actor: e.actor, text, spoken: true, audio: res.path, duration: dur });
+        // gaps: [startMs, endMs] silences inside the wav — post closes Glitch's mouth for them too
+        const gaps = res.spans ? speechGaps(res.spans, dur) : [];
+        this.log("line-start", { entryId: e.id, actor: e.actor, text, spoken: true, audio: res.path, duration: dur, ...(gaps.length ? { gaps } : {}) });
         if (e.actor === "Glitch") glitch.setTalking(true);
-        this.scheduleCues(e.text, dur);
+        this.scheduleCues(e.text, dur, res.spans, e.actor === "Glitch");
       };
       a.onplaying = onStart;
       a.onended = () => { onStart(); glitch.setTalking(false); this.log("line-end", { entryId: e.id }); if (this.audio === a) { this.audio = null; this.set({ speakingId: null }); } resolve(); };

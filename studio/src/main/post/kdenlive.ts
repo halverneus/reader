@@ -327,7 +327,13 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
   const freezes = evs.filter((e: any) => e.kind === "freeze");
 
   // who is talking when: the mic, plus Glitch's TTS lines
-  const speech: Span[] = [...(micRaw ? await micSpeech(micRaw, micOffset) : []), ...voice.map((v: any): Span => [rel(v.t), rel(v.t) + (v.duration ?? 0) / 1000])];
+  // (a Glitch line's [pause] gaps are silence: a leading or trailing pause mustn't move the first/last-word boundaries)
+  const voiceSpans = (v: any): Span[] => {
+    const out: Span[] = []; let at = 0;
+    for (const [a, b] of [...(v.gaps ?? []), [v.duration ?? 0, v.duration ?? 0]] as [number, number][]) { if (a > at) out.push([rel(v.t) + at / 1000, rel(v.t) + a / 1000]); at = Math.max(at, b); }
+    return out;
+  };
+  const speech: Span[] = [...(micRaw ? await micSpeech(micRaw, micOffset) : []), ...voice.flatMap(voiceSpans)];
   log(`[project] ${speech.length} speech spans\n`);
 
   // split segments at the intro marker so the intro can be inserted between takes

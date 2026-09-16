@@ -155,7 +155,7 @@ function Cell({ e }: { e: Entry }) {
 let previewAudio: HTMLAudioElement | null = null;
 let previewStop: (() => void) | null = null;
 
-/** Hear a line the way it will be spoken while recording: same voice, same [mood]-tag clean-up. Nothing is saved. */
+/** Hear a line the way it will be spoken while recording: same voice, same [mood]-tag clean-up and [pause]s. Nothing is saved. */
 function SayButton({ text, actor }: { text: string; actor: string }) {
   const { config } = useStore();
   const [st, setSt] = useState<"idle" | "loading" | "playing">("idle");
@@ -168,7 +168,7 @@ function SayButton({ text, actor }: { text: string; actor: string }) {
     previewStop?.(); // silence any other line that's playing
     const my = ++token.current; previewStop = stop; setSt("loading");
     try {
-      const r = await window.studio.invoke("tts:speak", { text: clean, voice: config?.voices?.[actor] ?? "am_puck", name: "preview", save: false });
+      const r = await window.studio.invoke("tts:speak", { text, voice: config?.voices?.[actor] ?? "am_puck", name: "preview", save: false });
       if (token.current !== my) return;
       const a = new Audio("data:audio/wav;base64," + r.audio);
       previewAudio = a; a.onended = () => { if (token.current === my) stop(); };

@@ -55,13 +55,13 @@ function Talk({ e, p }: { e: Entry; p: any }) {
   if (e.type === "line") return (
     <div class={"pitem " + e.actor}>
       <div class="who"><span class={"chip " + e.actor}>{e.actor}</span>{e.mood && <span class="chip face">{e.mood}</span>}</div>
-      <div class="txt">{splitMoodTags(e.text).segments.map((sg) => <>{sg.mood && <span class="tag">[{sg.mood}] </span>}{sg.text}</>)}</div>
+      <div class="txt">{splitMoodTags(e.text).segments.map((sg) => <>{sg.mood && <span class="tag">[{sg.mood}] </span>}{sg.pause != null && <span class="tag">[pause {sg.pause}] </span>}{sg.text}</>)}</div>
     </div>);
   if (e.type === "face") return <div class="pitem face"><span class="chip face">face</span> <span class="muted">{e.delay ? `after ${e.delay} ms, ` : ""}Glitch → {e.mood}{e.hold ? ` for ${e.hold} ms` : ""}</span></div>;
   if (e.type === "slide") return <div class="pitem slide"><span class="chip slide">slide</span> <span class="muted">{e.actor} → {e.to}</span></div>;
   if (e.type === "outro") return (
     <div class="pitem outro"><div class="who"><span class="chip outro">outro</span></div>
-      {outroPhases(e).map((ph, i) => <div class="txt" style={{ fontSize: "15px", color: p.outroPhase === i && e.start === p.marker ? "var(--text)" : "var(--muted)", marginBottom: "6px" }}><span class="chip face">{ph.phase}</span> {ph.title}{ph.subtitle ? ` · ${ph.subtitle}` : ""}{ph.names.length ? ` · ${ph.names.join(", ")}` : ""}<br />{splitMoodTags(ph.text).segments.map((sg) => <>{sg.mood && <span class="tag">[{sg.mood}] </span>}{sg.text}</>)}</div>)}
+      {outroPhases(e).map((ph, i) => <div class="txt" style={{ fontSize: "15px", color: p.outroPhase === i && e.start === p.marker ? "var(--text)" : "var(--muted)", marginBottom: "6px" }}><span class="chip face">{ph.phase}</span> {ph.title}{ph.subtitle ? ` · ${ph.subtitle}` : ""}{ph.names.length ? ` · ${ph.names.join(", ")}` : ""}<br />{splitMoodTags(ph.text).segments.map((sg) => <>{sg.mood && <span class="tag">[{sg.mood}] </span>}{sg.pause != null && <span class="tag">[pause {sg.pause}] </span>}{sg.text}</>)}</div>)}
     </div>);
   return null;
 }

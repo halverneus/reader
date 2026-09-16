@@ -27,7 +27,7 @@ kinds and their json fields:
   face     {"mood":"malice","delay":2000?,"hold":800?}   delay = wait before the face changes; hold = revert after
   slide    {"actor":"Dev|Glitch","to":"left|right|top|bottom|hide|show","over":600?}
   outro    {"next":"Dictionaries","thanks":["Nicole"],"phases":[{"phase":"next","text":"…","mood":"deception"}]?}
-Inline [mood] tags inside any text switch Glitch's face mid-line. Lines ≤ 70 chars. Every text line must be speakable.
+Inline [mood] tags inside any text switch Glitch's face mid-line. [pause 500] (ms; [pause] = 500) is a real silence in the voice (Kokoro ignores "..." and commas); Glitch's mouth stops for it. Lines ≤ 70 chars. Every text line must be speakable.
 "end" defaults to the next marker (or start+100); pass "end" in the json to override.`;
 
 const TEMPLATE = (title: string) => `script:

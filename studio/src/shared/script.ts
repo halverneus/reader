@@ -160,34 +160,86 @@ function parseMouse(s: string): KeyStep {
 export const STEP_HELP = `k:key | k:ctrl+shift+p | t:text to type | p:text to copy | w:ms
 m:move 960,540 | m:move 50%,50% | m:click [left|right|middle] | m:dblclick | m:down | m:up | m:drag x,y | m:scroll -3`;
 
-// ── inline mood tags in dialogue: "[laugh] Ha. [neutral] Anyway." ─────────────
-export interface TextSegment { mood?: string; text: string; offset: number }
-const TAG_RE = /\[([a-z]+)\]/g;
-export function splitMoodTags(text: string): { clean: string; segments: TextSegment[]; cues: { mood: string; charIndex: number }[] } {
-  const segments: TextSegment[] = []; const cues: { mood: string; charIndex: number }[] = [];
+// ── inline tags in dialogue: "[laugh] Ha. [pause 400] [neutral] Anyway." ─────
+// [mood] switches Glitch's face; [pause N] (ms, default 500; also Kokoro's own [pause:0.5s]) is a silence spliced
+// into the voice — Glitch's mouth stops for it, and the gap is in the saved wav, so it reaches the cut.
+export interface TextSegment { mood?: string; pause?: number; text: string; offset: number }
+export interface PauseCue { ms: number; charIndex: number }
+export interface MoodCue { mood: string; charIndex: number; beforePause?: boolean }
+const TAG_RE = /\[pause(?:[\s:]+(\d+(?:\.\d+)?)\s*(ms|s)?)?\s*\]|\[([a-z]+)\]/g;
+export const DEFAULT_PAUSE_MS = 500;
+export function splitMoodTags(text: string): { clean: string; segments: TextSegment[]; cues: MoodCue[]; pauses: PauseCue[] } {
+  const cues: MoodCue[] = []; const pauses: PauseCue[] = [];
+  const marks: { at: number; mood?: string; pause?: number }[] = [];
+  // squeeze as we go (tags leave doubled spaces behind) so each tag's position stays true in the final text
+  const squeeze = (t: string) => t.replace(/[ \t]{2,}/g, " ").replace(/ \n/g, "\n");
   let clean = ""; let last = 0; let m: RegExpExecArray | null;
   TAG_RE.lastIndex = 0;
   while ((m = TAG_RE.exec(text))) {
-    if (!MOOD_NAMES.includes(m[1])) continue;
-    clean += text.slice(last, m.index);
-    cues.push({ mood: m[1], charIndex: clean.length });
+    if (m[3] && !MOOD_NAMES.includes(m[3])) continue;
+    clean = squeeze(clean + text.slice(last, m.index));
     last = m.index + m[0].length;
+    marks.push(m[3] ? { at: clean.length, mood: m[3] } : { at: clean.length, pause: m[1] == null ? DEFAULT_PAUSE_MS : Math.round(parseFloat(m[1]) * (m[2] === "s" ? 1000 : 1)) });
   }
-  clean += text.slice(last);
-  clean = clean.replace(/[ \t]{2,}/g, " ").replace(/ \n/g, "\n").trim();
-  // segments for display
-  let pos = 0;
-  const bounds = [0, ...cues.map((c) => c.charIndex), clean.length];
-  for (let i = 0; i < bounds.length - 1; i++) {
-    const t = clean.slice(bounds[i], bounds[i + 1]);
-    if (t.length || i === 0) segments.push({ mood: i === 0 ? undefined : cues[i - 1].mood, text: t, offset: pos });
-    pos += t.length;
-  }
-  return { clean, segments, cues };
+  clean = squeeze(clean + text.slice(last));
+  const lead = clean.length - clean.trimStart().length;
+  clean = clean.trim();
+  for (const k of marks) k.at = Math.max(0, Math.min(clean.length, k.at - lead));
+  marks.forEach((k, i) => {
+    if (k.pause != null) { pauses.push({ ms: k.pause, charIndex: k.at }); return; }
+    // "[dismay] [pause]": the face changes as the silence begins, not after it
+    const beforePause = marks.slice(i + 1).some((n) => n.pause != null && n.at === k.at);
+    cues.push(beforePause ? { mood: k.mood!, charIndex: k.at, beforePause } : { mood: k.mood!, charIndex: k.at });
+  });
+  // segments for display: a new one at every tag
+  const segments: TextSegment[] = [{ text: clean.slice(0, marks[0]?.at ?? clean.length), offset: 0 }];
+  marks.forEach((k, i) => segments.push({ mood: k.mood, pause: k.pause, text: clean.slice(k.at, marks[i + 1]?.at ?? clean.length), offset: k.at }));
+  return { clean, segments: segments.filter((sg, i) => i === 0 || sg.text.length || sg.mood || sg.pause), cues, pauses };
 }
 
-/** Text with tags removed, for TTS and for Dev's prompter. */
+/** Text with tags removed, for Dev's prompter and logs. */
 export const cleanText = (text: string) => splitMoodTags(text).clean;
+
+/** What Kokoro reads: the clean text cut at each [pause], with the silence that follows each piece. */
+export function speechChunks(text: string): { text: string; from: number; to: number; pauseAfter: number }[] {
+  const { clean, pauses } = splitMoodTags(text);
+  const out: { text: string; from: number; to: number; pauseAfter: number }[] = [];
+  let from = 0;
+  for (const p of [...pauses, { ms: 0, charIndex: clean.length }]) {
+    if (p.charIndex > from || !out.length) out.push({ text: clean.slice(from, p.charIndex).trim(), from, to: p.charIndex, pauseAfter: 0 });
+    out[out.length - 1].pauseAfter += p.ms; // a leading [pause] makes an empty first chunk: silence before the first word
+    from = p.charIndex;
+  }
+  return out;
+}
+
+/** Timing of a spoken line inside its wav, so cues can follow the real speech instead of a char-count estimate. */
+export interface SpeechSpan { from: number; to: number; startMs: number; endMs: number }
+export function timeAtChar(spans: SpeechSpan[], charIndex: number, beforePause = false): number {
+  if (beforePause) { const s = spans.find((s) => s.to === charIndex); if (s) return s.endMs; }
+  for (const s of spans) {
+    if (charIndex < s.to || s === spans[spans.length - 1]) {
+      if (charIndex <= s.from) return s.startMs;
+      return s.startMs + Math.min(1, (charIndex - s.from) / Math.max(1, s.to - s.from)) * (s.endMs - s.startMs);
+    }
+  }
+  return 0;
+}
+/** Silent gaps between spoken spans, and any trailing [pause], in ms from the start of the wav: Glitch's mouth closes for these. */
+export function speechGaps(spans: SpeechSpan[], durationMs: number): [number, number][] {
+  const gaps = spans.slice(1).map((s, i): [number, number] => [spans[i].endMs, s.startMs]);
+  const end = spans.at(-1)?.endMs ?? durationMs;
+  if (durationMs - end > 1) gaps.push([end, durationMs]);
+  return gaps.filter(([a, b]) => b - a > 1);
+}
+
+/** Post render: a logged Glitch line-start → talk cues (seconds from `t`), mouth shut over its logged gaps. */
+export function talkCues(t: number, e: { duration?: number; gaps?: [number, number][] }): { t: number; talk: boolean }[] {
+  const out = [{ t, talk: true }];
+  for (const [a, b] of e.gaps ?? []) { out.push({ t: t + a / 1000, talk: false }); if (e.duration == null || b < e.duration) out.push({ t: t + b / 1000, talk: true }); }
+  if (e.duration) out.push({ t: t + e.duration / 1000, talk: false });
+  return out;
+}
 
 // ── validation (mirrors Scripting Rules hard requirements) ───────────────────
 export function validate(s: Script): { entryId: string; msg: string }[] {
