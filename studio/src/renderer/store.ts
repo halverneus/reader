@@ -11,7 +11,7 @@ export interface AppState {
   script: Script;
   errors: string[];
   dirty: boolean;
-  toast: { msg: string; kind: "info" | "error" | "ok"; id: number } | null;
+  toast: { msg: string; kind: "info" | "error" | "ok"; id: number; sticky?: boolean } | null;
 }
 let state: AppState = { tab: "script", config: null, scriptPath: null, scriptText: "", script: { entries: [], actors: [] }, errors: [], dirty: false, toast: null };
 const subs = new Set<(s: AppState) => void>();
@@ -26,7 +26,9 @@ export function useStore(): AppState {
   return state;
 }
 let toastId = 0;
-export function toast(msg: string, kind: "info" | "error" | "ok" = "info") {
-  const id = ++toastId; setState({ toast: { msg, kind, id } });
-  setTimeout(() => { if (getState().toast?.id === id) setState({ toast: null }); }, kind === "error" ? 7000 : 3500);
+/** `sticky` stays up until clicked: for things that must not be missed mid-take. */
+export function toast(msg: string, kind: "info" | "error" | "ok" = "info", sticky = false) {
+  const cur = getState().toast; if (cur?.sticky && !sticky) return; // don't bury a sticky warning under routine notices
+  const id = ++toastId; setState({ toast: { msg, kind, id, sticky } });
+  if (!sticky) setTimeout(() => { if (getState().toast?.id === id) setState({ toast: null }); }, kind === "error" ? 7000 : 3500);
 }

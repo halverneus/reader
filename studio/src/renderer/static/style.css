@@ -23,6 +23,7 @@ kbd{font-family:var(--mono);font-size:10px;color:var(--dim);margin-left:6px}
 .content{flex:1;min-height:0;display:flex}
 .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:8px 14px;box-shadow:0 8px 30px rgba(0,0,0,.4);z-index:50}
 .toast.error{border-color:var(--rose)} .toast.ok{border-color:var(--green)}
+.toast.sticky{cursor:pointer;border-width:2px;font-weight:600;max-width:80vw}
 
 /* generic */
 .btn{background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:6px 12px;color:var(--text);font-family:var(--display);font-weight:600;letter-spacing:.03em;font-size:13px;display:inline-flex;align-items:center;gap:6px}

@@ -514,15 +514,15 @@ class Recorder:
         self.recording = True
         self.rec = {"dir": rec_dir, "base_wall": wall, "announced": False, "eos": set(), "files": {n: os.path.join(rec_dir, f) for n, f in (("desktop", "desktop.mkv"), ("cam", "cam.mkv"), ("mic", "mic.flac")) if n in self.pipes}}
         self.push_state()
-        GLib.timeout_add(5000, self._announce_timeout)
+        GLib.timeout_add(5000, self._announce_timeout, self.rec)
 
     def _check_started(self):
         r = self.rec
         if r and not r["announced"] and all(n in self.first for n in r["files"]): self._announce()
         return False
 
-    def _announce_timeout(self):
-        if self.rec and not self.rec["announced"]: self._announce()
+    def _announce_timeout(self, rec):
+        if self.rec is rec and not rec["announced"]: self._announce()
         return False
 
     def _timing(self):
@@ -545,15 +545,18 @@ class Recorder:
         self.stopping = True; self.push_state()
         for name, pad in list(self.eos_pads.items()):
             if name in self.pipes: pad.send_event(Gst.Event.new_eos())
-        self.rec["deadline"] = GLib.timeout_add(10000, self._finish)
+        # safety net for a pipeline that never delivers EOS. Bound to *this* recording: an unbound timer that
+        # outlived a clean stop once fired 10 s later into the next take and tore it down unfinalised.
+        self.rec["deadline"] = GLib.timeout_add(10000, self._finish, self.rec)
 
     def _maybe_finish(self):
         if self.rec and all(n in self.rec["eos"] for n in self.pipes): self._finish()
 
-    def _finish(self):
+    def _finish(self, deadline_for=None):
         r = self.rec
-        if r is None: return False
-        if r.get("deadline"): GLib.source_remove(r["deadline"]) if r["eos"] != set(self.pipes) else None
+        if r is None or (deadline_for is not None and deadline_for is not r): return False
+        if deadline_for is None and r.get("deadline"): GLib.source_remove(r["deadline"])  # clean finish: disarm it
+        r["deadline"] = None
         timing = self._timing()
         clean = sorted(r["eos"])
         for n in list(self.pipes): self.teardown(n)

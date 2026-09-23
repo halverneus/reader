@@ -43,6 +43,9 @@ class Capture {
   private statusTimer?: NodeJS.Timeout;
   private quitting = false; private crashes = 0;
   onFreeze?: (src: string, reason: string, at: number) => void;
+  /** A take stopped capturing without being asked to (engine stopped, crashed, or the screen/mic pipeline failed). */
+  onLost?: (why: string) => void;
+  private stopRequested = false;
 
   start() {
     if (this.proc || this.quitting) return;
@@ -54,6 +57,7 @@ class Capture {
     child.on("error", (e) => { this.message = `capture engine failed to start: ${e.message}`; });
     child.on("exit", (code, sig) => {
       if (this.proc === child) this.proc = null;
+      if ((this.recording || this.stopping) && !this.stopRequested) this.onLost?.(`the capture engine exited (${sig ?? code})`);
       this.running = false; this.recording = false; this.stopping = false;
       this.fail(`capture engine exited (${sig ?? code})`);
       if (!this.quitting && this.crashes++ < 5) setTimeout(() => this.start(), 2000);
@@ -83,7 +87,13 @@ class Capture {
     try { m = JSON.parse(line); } catch { process.stdout.write(`[recorder] ${line}\n`); return; }
     switch (m.ev) {
       case "hello": this.running = true; this.encoder = m.encoder; this.message = ""; setTimeout(() => { if (this.running) this.crashes = 0; }, 30000); break;
-      case "state": this.sources = m.sources ?? {}; this.recording = m.recording; this.stopping = m.stopping; this.encoder = m.encoder; break;
+      case "state":
+        // the camera recovers on its own (black frames, then a new source); the screen and the mic do not
+        if (m.recording && !this.stopRequested) for (const id of ["desktop", "mic"]) {
+          const now = m.sources?.[id], was = this.sources[id];
+          if (now?.status === "error" && was?.status !== "error") this.onLost?.(`${LABELS[id]}: ${now.detail || "failed"}`);
+        }
+        this.sources = m.sources ?? {}; this.recording = m.recording; this.stopping = m.stopping; this.encoder = m.encoder; break;
       case "thumb": this.thumbs[m.src] = `data:image/jpeg;base64,${m.jpg}`; break;
       case "level": {
         const mag = Math.max(0, ...(m.rms ?? [])), pk = Math.max(0, ...(m.peak ?? []));
@@ -96,6 +106,7 @@ class Capture {
       case "token": saveConfig({ capture: { restoreToken: m.token } } as any); break;
       case "error": this.message = m.msg; process.stderr.write(`[recorder] ${m.msg}\n`); this.settle(m, false); return;
       case "log": process.stdout.write(`[recorder] ${m.msg}\n`); break;
+      case "stopped": if (!this.stopRequested) this.onLost?.("the capture engine stopped recording by itself"); break;
     }
     this.settle(m, true);
   }
@@ -104,12 +115,14 @@ class Capture {
   async startRecording(dir: string): Promise<RecordTiming> {
     if (!this.proc) this.start();
     if (!this.running) await this.wait("hello", "", 8000);
+    this.stopRequested = false;
     const got = this.wait("recording", "record", 15000);
     this.send({ cmd: "record", dir });
     return got;
   }
   async stopRecording(): Promise<Partial<RecordTiming>> {
     if (!this.proc || !(this.recording || this.stopping)) return {};
+    this.stopRequested = true;
     const got = this.wait("stopped", "stop", 25000);
     this.send({ cmd: "stop" });
     return got;

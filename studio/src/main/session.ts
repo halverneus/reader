@@ -5,13 +5,15 @@ import path from "node:path";
 import { loadConfig } from "./config";
 import { obs } from "./obs";
 import { capture } from "./capture";
+import { broadcast } from "./index";
 
 export interface SessionMeta {
   dir: string; name: string; scriptPath: string; startedAt: number; stoppedAt?: number; recordStart?: number;
   files: { desktop?: string; cam?: string; mic?: string };
   /** source position for desktop time t is t + offset (seconds) */
   camOffset?: number; micOffset?: number;
-  capture?: { backend: "gstreamer" | "obs"; encoder?: string; first?: Record<string, number>; stopError?: string };
+  capture?: { backend: "gstreamer" | "obs"; encoder?: string; first?: Record<string, number>; stopError?: string;
+    /** capture stopped mid-take (wall ms) and why — the files end there */ lostAt?: number; lostWhy?: string };
 }
 let current: { meta: SessionMeta; events: any[]; flushTimer?: NodeJS.Timeout } | null = null;
 export const currentSession = () => current?.meta ?? null;
@@ -86,4 +88,13 @@ export function registerSessionIpc() {
   ipcMain.handle("session:current", () => currentSession());
   // the Kdenlive generator drops a "camera froze here" guide at each of these
   capture.onFreeze = (src, reason, at) => pushEvent({ kind: "freeze", t: Math.round(at), src, reason });
+  // the take keeps running in the prompter, but nothing is being recorded any more: say so, loudly, and
+  // leave a mark in the session so post refuses to build a project from it without explaining why
+  capture.onLost = (why) => {
+    if (!current) return;
+    const t = Date.now();
+    current.meta.capture = { ...current.meta.capture!, lostAt: current.meta.capture?.lostAt ?? t, lostWhy: current.meta.capture?.lostWhy ?? why };
+    pushEvent({ kind: "capture-lost", t, why });
+    broadcast("capture:lost", why);
+  };
 }

@@ -32,6 +32,7 @@ class Production {
 
   constructor() {
     window.studio.on("keys:progress", ({ entryId, step }: any) => { if (this.st.keysEntryId === entryId) this.set({ keysStep: step }); });
+    window.studio.on("capture:lost", (why: string) => toast(`NOT RECORDING: ${why}. Stop, and record this take again.`, "error", true));
   }
 
   clockText() {

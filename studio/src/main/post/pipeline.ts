@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { alignCam } from "./align";
+import { checkCapture } from "./check";
 import { cleanMic } from "./clean-audio";
 import { matteCam } from "./matte";
 import { renderGlitch } from "./glitch-render";
@@ -17,6 +18,7 @@ export async function runPipeline(dir: string, what: string, onSteps: (s: StepSt
   const session = JSON.parse(fs.readFileSync(path.join(dir, "session.json"), "utf8"));
   const all = what === "all";
   const steps: StepState[] = [
+    { id: "check", label: "Check the recording covers the whole take", state: "idle" },
     { id: "align", label: "Align cam + mic to desktop", state: "idle" },
     { id: "clean", label: "Clean mic audio (low cut + RNNoise + soft gate) → mic-clean.flac", state: "idle" },
     { id: "matte", label: "Matte Dev (RVM in Docker, GPU) → dev-alpha.webm", state: "idle" },
@@ -28,7 +30,7 @@ export async function runPipeline(dir: string, what: string, onSteps: (s: StepSt
   const push = () => onSteps(steps.map((s) => ({ ...s })));
   const run = async (id: string, fn: (progress: (detail: string) => void) => Promise<string | void>) => {
     const st = steps.find((s) => s.id === id)!;
-    if (!all && what !== id) return;
+    if (!all && what !== id && id !== "check") return; // the check guards every step, run alone or not
     // Run everything renders only when asked to (Post tab checkbox); the 6 Render button always does
     if (id === "render" && all && !loadConfig().post?.autoRender) { st.detail = "off — tick “render video” to include it"; push(); return; }
     st.state = "running"; push();
@@ -38,6 +40,7 @@ export async function runPipeline(dir: string, what: string, onSteps: (s: StepSt
     push();
   };
   push();
+  await run("check", () => checkCapture(dir, session, log));
   await run("align", () => alignCam(dir, session, log));
   await run("clean", () => cleanMic(dir, session, log));
   await run("matte", () => matteCam(dir, session, log));

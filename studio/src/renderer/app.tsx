@@ -46,7 +46,7 @@ export function App() {
         {s.tab === "post" && <PostView />}
         {s.tab === "settings" && <SettingsView />}
       </main>
-      {s.toast && <div class={"toast " + s.toast.kind}>{s.toast.msg}</div>}
+      {s.toast && <div class={"toast " + s.toast.kind + (s.toast.sticky ? " sticky" : "")} onClick={() => s.toast?.sticky && setState({ toast: null })} title={s.toast.sticky ? "Click to dismiss" : undefined}>{s.toast.msg}</div>}
     </div>
   );
 }
