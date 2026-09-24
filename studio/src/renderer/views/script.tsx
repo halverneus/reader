@@ -116,6 +116,7 @@ function Cell({ e }: { e: Entry }) {
   const patch = (p: Partial<Entry>) => updateScript((sc) => { const i = sc.entries.findIndex((x) => x.id === e.id); if (i >= 0) sc.entries[i] = { ...sc.entries[i], ...p } as Entry; });
   const remove = () => updateScript((sc) => { sc.entries = sc.entries.filter((x) => x.id !== e.id); });
   const chip = e.type === "line" ? e.actor : e.type;
+  const keysRef = useRef<HTMLTextAreaElement>(null);
   return (
     <div class="cell">
       <div class="who">
@@ -134,8 +135,8 @@ function Cell({ e }: { e: Entry }) {
           </div></>}
         {e.type === "editor" && <textarea value={e.text} rows={Math.max(1, e.text.split("\n").length)} onInput={(ev: any) => patch({ text: ev.currentTarget.value } as any)} placeholder="Notes for the editor (never spoken)" />}
         {e.type === "keys" && <>
-          <textarea class="mono" value={e.keystrokes.join("\n")} rows={Math.max(2, e.keystrokes.length)} onInput={(ev: any) => patch({ keystrokes: ev.currentTarget.value.split("\n") } as any)} placeholder={STEP_HELP} title={STEP_HELP} />
-          <div class="meta"><span class="muted" style="font-size:11px">speed</span><input type="number" min={1} max={10} style="width:56px" value={e.speed ?? 10} onChange={(ev: any) => patch({ speed: +ev.currentTarget.value } as any)} /><span class="muted" style="font-size:11px">one step per line · k: t: p: w: m:</span></div></>}
+          <textarea ref={keysRef} class="mono" value={e.keystrokes.join("\n")} rows={Math.max(2, e.keystrokes.length)} onInput={(ev: any) => patch({ keystrokes: ev.currentTarget.value.split("\n") } as any)} placeholder={STEP_HELP} title={STEP_HELP} />
+          <div class="meta"><SendKeysButton e={e} area={keysRef} /><span class="muted" style="font-size:11px">speed</span><input type="number" min={1} max={10} style="width:56px" value={e.speed ?? 10} onChange={(ev: any) => patch({ speed: +ev.currentTarget.value } as any)} /><span class="muted" style="font-size:11px">one step per line · k: t: p: w: m:</span></div></>}
         {e.type === "face" && <div class="meta">
           <select value={e.mood} onChange={(ev: any) => patch({ mood: ev.currentTarget.value } as any)}>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
           <span class="muted" style="font-size:11px" title="wait this long after the marker before the face changes">delay ms</span><input type="number" min={0} step={100} style="width:80px" value={e.delay ?? 0} onChange={(ev: any) => patch({ delay: +ev.currentTarget.value || undefined } as any)} />
@@ -148,6 +149,60 @@ function Cell({ e }: { e: Entry }) {
       </div>
       <button class="x" title="remove" onClick={remove}>×</button>
     </div>
+  );
+}
+
+// one keys run at a time (the VM has one keyboard)
+let keysStop: (() => void) | null = null;
+
+/** Send a keys block to the VM now, exactly as a recording would (same steps, speed and timing), to check it
+ *  before the take. Shows the step being sent, so a wrong one is easy to spot. Shift-click sends only the line
+ *  the cursor is on. Click again to stop. */
+function SendKeysButton({ e, area }: { e: Entry & { type: "keys" }; area: { current: HTMLTextAreaElement | null } }) {
+  const [st, setSt] = useState<{ step: number; of: number; only?: number } | null>(null);
+  const token = useRef(0);
+  const runId = useRef("");
+  useEffect(() => window.studio.on("keys:progress", ({ entryId, step }: any) => {
+    if (entryId === runId.current) setSt((cur) => (cur ? { ...cur, step } : cur));
+  }), []);
+  const stop = () => { token.current++; window.studio.invoke("keys:cancel"); runId.current = ""; keysStop = null; setSt(null); };
+  useEffect(() => () => { if (keysStop === stop) stop(); }, []);
+  const click = async (ev: MouseEvent) => {
+    if (st) return stop();
+    keysStop?.(); // stop any other block that is still typing
+    let steps = e.keystrokes, only: number | undefined;
+    if (ev.shiftKey && area.current) {
+      only = area.current.value.slice(0, area.current.selectionStart ?? 0).split("\n").length - 1;
+      steps = [e.keystrokes[only] ?? ""];
+    }
+    if (!steps.some((x) => x.trim())) { toast("Nothing to send on that line", "info"); return; }
+    const my = ++token.current; keysStop = stop;
+    runId.current = `preview:${e.id}:${my}`;
+    setSt({ step: 0, of: steps.length, only });
+    try { await window.studio.invoke("keys:run", { entryId: runId.current, steps, speed: e.speed ?? 10, dryRun: false }); }
+    catch (err: any) {
+      if (token.current !== my) return;
+      const msg = String(err.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
+      toast(/No running VM/.test(msg) ? "No running VM — start it in Boxes, then try again" : `Keys: ${msg}`, "error");
+    }
+    if (token.current === my) { runId.current = ""; keysStop = null; setSt(null); }
+  };
+  const line = st ? (st.only ?? st.step) : -1;
+  const now = st && st.step < st.of ? (e.keystrokes[line] ?? "").trim() : "";
+  const color = st ? "var(--teal)" : "currentColor";
+  return (
+    <>
+      <button class="btn sm" disabled={!e.keystrokes.some((x) => x.trim())} onClick={click as any} style="padding:2px 6px;display:inline-flex;align-items:center"
+        title={st ? "Stop" : "Send these keys to the VM now (shift-click: only the line the cursor is on)"}>
+        <svg width="22" height="14" viewBox="0 0 34 20" fill="none" stroke={color} stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="22" height="14" rx="2.5" />
+          <path d="M6 7.5h2M11 7.5h2M16 7.5h2M6 12.5h12" opacity={st ? 1 : 0.7} />
+          <path d="M27 6l4 4-4 4" opacity={st ? 1 : 0.55} />
+        </svg>
+      </button>
+      {st && <span class="mono" style="font-size:11px;color:var(--teal);max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={now}>
+        {st.only != null ? `line ${st.only + 1}` : `${Math.min(st.step + 1, st.of)}/${st.of}`}{now ? ` · ${now}` : ""}</span>}
+    </>
   );
 }
 
