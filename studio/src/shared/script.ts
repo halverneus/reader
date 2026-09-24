@@ -124,7 +124,7 @@ export type KeyStep =
   | { kind: "type"; text: string }
   | { kind: "paste"; text: string }
   | { kind: "wait"; ms: number }
-  | { kind: "mouse"; action: "move" | "click" | "dblclick" | "down" | "up" | "drag" | "scroll"; x?: number; y?: number; pct?: boolean; button?: "left" | "right" | "middle"; amount?: number };
+  | { kind: "mouse"; action: "move" | "click" | "dblclick" | "down" | "up" | "drag" | "scroll"; x?: number; y?: number; pct?: boolean; button?: "left" | "right" | "middle"; amount?: number; instant?: boolean };
 
 export function parseStep(raw: string): KeyStep {
   const s = raw.trim();
@@ -147,6 +147,7 @@ function parseMouse(s: string): KeyStep {
   const btn = (a: string): "left" | "right" | "middle" => (a === "right" ? "right" : a === "middle" ? "middle" : "left");
   switch (verb) {
     case "move": return { kind: "mouse", action: "move", ...xy(arg) };
+    case "jump": return { kind: "mouse", action: "move", instant: true, ...xy(arg) };
     case "drag": return { kind: "mouse", action: "drag", ...xy(arg) };
     case "click": return { kind: "mouse", action: "click", button: btn(arg) };
     case "dblclick": case "double": return { kind: "mouse", action: "dblclick", button: btn(arg) };
@@ -158,7 +159,7 @@ function parseMouse(s: string): KeyStep {
 }
 
 export const STEP_HELP = `k:key | k:ctrl+shift+p | t:text to type | p:text to copy | w:ms
-m:move 960,540 | m:move 50%,50% | m:click [left|right|middle] | m:dblclick | m:down | m:up | m:drag x,y | m:scroll -3`;
+m:move 960,540 (glides) | m:move 50%,50% | m:jump 960,540 (instant) | m:click [left|right|middle] | m:dblclick | m:down | m:up | m:drag x,y | m:scroll -3`;
 
 // ── inline tags in dialogue: "[laugh] Ha. [pause 400] [neutral] Anyway." ─────
 // [mood] switches Glitch's face; [pause N] (ms, default 500; also Kokoro's own [pause:0.5s]) is a silence spliced

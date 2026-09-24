@@ -83,23 +83,39 @@ function absXY(x: number, y: number, pct: boolean) {
   const fx = pct ? x / 100 : x / width, fy = pct ? y / 100 : y / height;
   return { ax: Math.round(Math.max(0, Math.min(1, fx)) * 32767), ay: Math.round(Math.max(0, Math.min(1, fy)) * 32767) };
 }
-let lastMouse = { x: 0, y: 0, pct: true };
+// Where we last put the pointer, as fractions of the screen. Before the first move we don't know, so the first glide
+// starts from the centre (the pointer jumps there, then travels).
+let lastMouse = { fx: 0.5, fy: 0.5 };
+const toFrac = (s: { x?: number; y?: number; pct?: boolean }) => { const { width, height } = loadConfig().vm; return { fx: (s.x ?? 0) / (s.pct ? 100 : width), fy: (s.y ?? 0) / (s.pct ? 100 : height) }; };
+const absEv = (fx: number, fy: number) => { lastMouse = { fx, fy }; const { ax, ay } = absXY(fx * 100, fy * 100, true); return [{ type: "abs", data: { axis: "x", value: ax } }, { type: "abs", data: { axis: "y", value: ay } }]; };
+/** How long a glide takes: quick for a nudge, never slow across the screen (students follow it without waiting on it). */
+export const glideMs = (dist: number) => Math.round(Math.min(750, 220 + 450 * dist)); // dist: fraction of the screen diagonal
+/** Glide the pointer with an ease-in-out so the eye can follow it. Positions come from elapsed time, not a step
+ *  count: each update is a virsh round-trip of a few tens of ms, and the glide should take the same time regardless. */
+async function glide(vm: Vm, to: { fx: number; fy: number }) {
+  const from = { ...lastMouse };
+  const dist = Math.hypot(to.fx - from.fx, (to.fy - from.fy) * 9 / 16) / Math.hypot(1, 9 / 16);
+  if (dist < 0.002) { await sendEvents(vm, absEv(to.fx, to.fy)); return; }
+  const dur = glideMs(dist), t0 = Date.now();
+  await sendEvents(vm, absEv(from.fx, from.fy)); // put it where the glide starts (matters for the very first move)
+  for (;;) {
+    if (cancelFlag.v) return;
+    const t = Math.min(1, (Date.now() - t0) / dur), k = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    await sendEvents(vm, absEv(from.fx + (to.fx - from.fx) * k, from.fy + (to.fy - from.fy) * k));
+    if (t >= 1) return;
+    await sleep(8);
+  }
+}
 async function mouse(vm: Vm, s: Extract<KeyStep, { kind: "mouse" }>) {
   const btn = (b?: string) => ({ type: "btn", data: { down: true, button: b ?? "left" } });
   const rel = (b?: string) => ({ type: "btn", data: { down: false, button: b ?? "left" } });
-  const move = (x: number, y: number, pct: boolean) => { const { ax, ay } = absXY(x, y, pct); lastMouse = { x, y, pct }; return [{ type: "abs", data: { axis: "x", value: ax } }, { type: "abs", data: { axis: "y", value: ay } }]; };
   switch (s.action) {
-    case "move": await sendEvents(vm, move(s.x ?? 0, s.y ?? 0, !!s.pct)); break;
+    case "move": { const to = toFrac(s); if (s.instant) await sendEvents(vm, absEv(to.fx, to.fy)); else await glide(vm, to); break; }
     case "click": await sendEvents(vm, [btn(s.button)]); await sleep(40); await sendEvents(vm, [rel(s.button)]); break;
     case "dblclick": for (let i = 0; i < 2; i++) { await sendEvents(vm, [btn(s.button)]); await sleep(30); await sendEvents(vm, [rel(s.button)]); await sleep(60); } break;
     case "down": await sendEvents(vm, [btn(s.button)]); break;
     case "up": await sendEvents(vm, [rel(s.button)]); break;
-    case "drag": {
-      await sendEvents(vm, [btn("left")]); await sleep(60);
-      const steps = 12; const from = lastMouse;
-      for (let i = 1; i <= steps; i++) { const t = i / steps; await sendEvents(vm, move(from.x + ((s.x ?? 0) - from.x) * t, from.y + ((s.y ?? 0) - from.y) * t, !!s.pct)); await sleep(16); }
-      await sendEvents(vm, [rel("left")]); break;
-    }
+    case "drag": { await sendEvents(vm, [btn("left")]); await sleep(60); await glide(vm, toFrac(s)); await sleep(40); await sendEvents(vm, [rel("left")]); break; }
     case "scroll": { const n = Math.abs(s.amount ?? 1), b = (s.amount ?? 1) > 0 ? "wheel-down" : "wheel-up"; for (let i = 0; i < n; i++) { await sendEvents(vm, [btn(b)]); await sendEvents(vm, [rel(b)]); await sleep(40); } break; }
   }
 }
@@ -113,7 +129,7 @@ export async function runSteps(entryId: string, raw: string[], speed: number, dr
       if (my.v) return;
       broadcast("keys:progress", { entryId, step: i });
       const s = parseStep(raw[i]);
-      const ms = s.kind === "type" ? s.text.length * Math.max(char, 4) : s.kind === "wait" ? s.ms : s.kind === "mouse" ? 120 : 60;
+      const ms = s.kind === "type" ? s.text.length * Math.max(char, 4) : s.kind === "wait" ? s.ms : s.kind === "mouse" ? ((s.action === "move" && !s.instant) || s.action === "drag" ? glideMs(0.35) : 120) : 60;
       await sleep(ms + cmd);
     }
     broadcast("keys:progress", { entryId, step: raw.length });
