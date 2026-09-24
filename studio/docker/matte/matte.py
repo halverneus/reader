@@ -26,24 +26,29 @@ enc = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-s", f"{W}x{H}", "-r", 
 wf = subprocess.Popen(enc + ["-pix_fmt", "rgb24", "-i", "-", "-c:v", "libx264", "-preset", "fast", "-crf", a.crf, "-pix_fmt", "yuv444p", a.fgr], stdin=subprocess.PIPE)
 wp = subprocess.Popen(enc + ["-pix_fmt", "gray", "-i", "-", "-c:v", "libx264", "-preset", "fast", "-crf", a.crf, "-pix_fmt", "gray", a.pha], stdin=subprocess.PIPE)
 
-# Damaged camera frames: the phone sometimes delivers a partial JPEG, decoded as a strip of picture over flat grey.
-# RVM finds no person in it and Dev blinks out for a frame (67 times in the 2026-09-23 Create and Drop Schema take,
-# more the longer the phone ran). Such a frame has almost no colour — 2-8% of a normal frame's saturation against a
-# green screen, where good frames never dropped below 66% — so it is swapped for the last good frame.
+# Damaged camera frames: the phone sometimes delivers a JPEG cut short, decoded as the part that arrived over flat
+# grey to the bottom of the frame. RVM finds no person (or half of one) and Dev blinks out for a frame — 67 fully and
+# ~23 partly grey frames in the 2026-09-24 Create and Drop Schema take, more the longer the phone ran. Two tests, both
+# measured on that take (21,185 frames): a grey band of >= 2 of 108 rows at the bottom (damaged frames showed 2-98;
+# not one clean frame had a single such row — even a 2-row band cost Dev the bottom 15% of the matte), or almost no colour at all (damaged 2-8% of the recent median saturation, clean >= 66%).
+# A damaged frame is swapped for the last good one.
 sat_hist = collections.deque(maxlen=150); last_good = None; repaired = 0
-def saturation(b):
-    a = np.frombuffer(b, dtype=np.uint8).reshape(H, W, 3)[::8, ::8].astype(np.int16)
-    return float((a.max(axis=2) - a.min(axis=2)).mean())
+def inspect(b):
+    a = np.frombuffer(b, dtype=np.uint8).reshape(H, W, 3)[::max(1, H // 108), ::max(1, W // 192)].astype(np.int16)
+    spread = a.max(axis=2) - a.min(axis=2)
+    flat = (spread < 6).all(axis=1) & (np.abs(a.mean(axis=(1, 2)) - 128) < 8) & (a.std(axis=(1, 2)) < 3)
+    tail = int(np.argmin(flat[::-1])) if not flat.all() else len(flat)  # grey rows counted up from the bottom
+    return float(spread.mean()), tail / len(flat)
 
 rec = [None] * 4; n = 0; size = W * H * 3
 with torch.no_grad():
     while True:
         buf = rd.stdout.read(size)
         if len(buf) < size: break
-        s = saturation(buf)
-        if len(sat_hist) >= 30 and last_good is not None and s < 0.3 * float(np.median(sat_hist)):
+        s, grey = inspect(buf)
+        if last_good is not None and (grey >= 2 / 108 or (len(sat_hist) >= 30 and s < 0.3 * float(np.median(sat_hist)))):
             buf = last_good; repaired += 1
-            print(f"[matte] frame {n}: damaged camera frame (saturation {s:.1f}), reused the previous one", flush=True)
+            print(f"[matte] frame {n}: damaged camera frame (bottom {grey:.0%} grey, saturation {s:.1f}), reused the previous one", flush=True)
         else:
             if s > 3: sat_hist.append(s)  # the black pre-camera frames don't count towards "normal"
             last_good = buf
