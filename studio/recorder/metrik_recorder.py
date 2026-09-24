@@ -376,11 +376,27 @@ class Recorder:
         of = make("capsfilter", caps=caps(f"video/x-raw,format=NV12,width={W},height={H},pixel-aspect-ratio=1/1"))
         for e in (src, cf, dec, cv, sc, of): b.add(e)
         link(src, cf, dec); link(cv, sc, of)
+        cf.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._drop_truncated_jpeg)
         sink = cv.get_static_pad("sink")
         dec.connect("pad-added", lambda _d, pad: (not sink.is_linked()) and pad.query_caps(None).to_string().startswith("video/") and pad.link(sink))
         ghost = Gst.GhostPad.new("src", of.get_static_pad("src")); b.add_pad(ghost)
         ghost.add_probe(Gst.PadProbeType.BUFFER, self._cam_probe)
         return b
+
+    def _drop_truncated_jpeg(self, _pad, info):
+        """The phone (UVC MJPEG) sometimes sends a frame cut short. jpegdec paints what arrived and fills the rest with
+        grey, the grey frame gets recorded, and matting loses Dev for that frame — 67 times in one 12-minute take on
+        2026-09-23, more the longer the phone ran. A complete JPEG ends with the EOI marker FF D9 (some cameras pad
+        with zeros after it). Drop anything else; the compositor repeats the previous frame for that 1/30 s."""
+        buf = info.get_buffer(); n = buf.get_size()
+        if n < 4: return Gst.PadProbeReturn.OK
+        head = buf.extract_dup(0, 2)
+        if head != b"\xff\xd8": return Gst.PadProbeReturn.OK  # not JPEG (raw formats pass through)
+        tail = buf.extract_dup(max(0, n - 64), min(64, n)).rstrip(b"\x00")
+        if tail.endswith(b"\xff\xd9"): return Gst.PadProbeReturn.OK
+        self.cam_truncated = getattr(self, "cam_truncated", 0) + 1
+        if self.cam_truncated in (1, 10) or self.cam_truncated % 100 == 0: log(f"camera: dropped {self.cam_truncated} truncated JPEG frame(s)")
+        return Gst.PadProbeReturn.DROP
 
     def _cam_probe(self, _pad, info):
         now = time.monotonic(); self.cam_last_buf = now

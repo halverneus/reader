@@ -28,7 +28,13 @@ export async function matteCam(dir: string, session: any, log: Log): Promise<str
   await ensureImage(log);
   const fgr = path.join(dir, "_fgr.mp4"), pha = path.join(dir, "_pha.mp4");
   const variant = process.env.METRIK_MATTE_VARIANT || "resnet50";
-  await run("docker", ["run", "--rm", "--gpus", "all", "-v", `${dir}:/work`, IMAGE, `/work/${path.basename(cam)}`, "/work/_fgr.mp4", "/work/_pha.mp4", "--variant", variant, "--downsample", "0.25"], log);
+  // run this build's matte.py, not the copy baked into the image (the image is only built once, so a fixed script
+  // would otherwise never reach it). Staged in the session folder: the AppImage's FUSE mount isn't visible to dockerd.
+  const script = path.join(dir, "_matte.py");
+  fs.copyFileSync(path.join(dockerDir(), "matte.py"), script);
+  try {
+    await run("docker", ["run", "--rm", "--gpus", "all", "-v", `${dir}:/work`, "--entrypoint", "python", IMAGE, "/work/_matte.py", `/work/${path.basename(cam)}`, "/work/_fgr.mp4", "/work/_pha.mp4", "--variant", variant, "--downsample", "0.25"], log);
+  } finally { fs.rmSync(script, { force: true }); }
   // Merge color + alpha → VP9 alpha WebM; keep the cam's audio (mic) for alignment/reference.
   log("[matte] encoding dev-alpha.webm (libvpx-vp9 yuva420p)\n");
   await ffmpeg(["-y", "-i", fgr, "-i", pha, "-i", cam, "-filter_complex", "[0:v][1:v]alphamerge,format=yuva420p[v]", "-map", "[v]", "-map", "2:a:0?", "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-row-mt", "1", "-threads", "8", "-speed", "2", "-b:v", "0", "-crf", "22", "-c:a", "libopus", "-b:a", "128k", out], log);
