@@ -585,6 +585,10 @@ class Recorder:
         return False
 
     def shutdown(self):
+        # A v4l2src whose phone dropped off USB can wedge set_state(NULL) forever; the main loop then never runs again,
+        # SIGTERM is ignored and /dev/videoN stays busy for every later recorder (2026-10-16). Stop finalising and exit.
+        if not getattr(self, "quitting", False):
+            t = threading.Timer(20, lambda: (log("shutdown hung — exiting"), os._exit(1))); t.daemon = True; t.start()
         self.quitting = True
         if self.recording: self.stop_recording(); return
         for n in list(self.pipes): self.teardown(n)

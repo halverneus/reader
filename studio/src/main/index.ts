@@ -16,6 +16,10 @@ let win: BrowserWindow | null = null;
 let headlessMode = false;
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 app.setName("Metrik Studio");
+// Two windows means two recorders fighting over the phone camera ("Device or resource busy"); focus the first instead.
+const guiMode = !["--post", "--obs-setup", "--diagnose"].some((f) => process.argv.includes(f)) && !process.env.STUDIO_SHOT;
+if (guiMode && !app.requestSingleInstanceLock()) app.exit(0);
+app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
 
 function createWindow() {
   win = new BrowserWindow({
