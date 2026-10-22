@@ -9,6 +9,8 @@ const jobs = [
   { ...common, entryPoints: ["src/renderer/index.tsx"], platform: "browser", format: "iife", outfile: "dist/renderer/index.js", jsx: "automatic", jsxImportSource: "preact" },
   { ...common, entryPoints: ["src/renderer/glitch-page.ts"], platform: "browser", format: "iife", outfile: "dist/renderer/glitch-page.js" },
   { ...common, entryPoints: ["src/cli/mscript.ts"], platform: "node", format: "cjs", outfile: "dist/cli/mscript.js", banner: { js: "#!/usr/bin/env node" } },
+  { ...common, entryPoints: ["src/mcp/server.ts"], platform: "node", format: "cjs", outfile: "dist/cli/metrik-mcp.js", banner: { js: "#!/usr/bin/env node" } },
+  { ...common, entryPoints: ["src/mcp/test.ts"], platform: "node", format: "cjs", outfile: "dist/cli/metrik-test.js", banner: { js: "#!/usr/bin/env node" } },
   { ...common, entryPoints: ["src/renderer/outro-page.ts"], platform: "browser", format: "iife", outfile: "dist/renderer/outro-page.js" },
 ];
 cpSync("src/renderer/static", "dist/renderer", { recursive: true });

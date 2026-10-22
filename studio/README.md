@@ -54,8 +54,9 @@ Settings → **Run checks** tests all of the above.
    (opening, "Roll Intro", Dev's sign-off, `outro`). Or `mscript new <path> "Title"` from a shell.
 2. **Write**: edit slots in the app (every entry kind has a cell; `+line +note +keys +face +slide +outro` on each marker,
    `↓ ins` inserts a marker between two), switch to **YAML** for raw editing, or ask the assistant. From Claude Code use
-   the `mscript` CLI and the `metrik-script` skill in the courses repo. Glitch's cues are inline `[mood]` tags in any
-   line's text plus `mood:` fields and `face` entries.
+   the `metrik` MCP server (preferred) or the `mscript` CLI. Glitch's cues are inline `[mood]` tags in any
+   line's text plus `mood:` fields and `face` entries. `mscript check <file>` runs the whole rule set and exits
+   non-zero on an error, so a generator can call it instead of keeping its own copy of the rules.
 3. **Rehearse**: Record tab without pressing Record. Everything runs (TTS, Glitch, keys); untick *send keys to VM* to
    simulate keystrokes with the same timing when the VM is off.
 4. **Record**: press ● Record. Same view, same controls; the take log is written.
@@ -149,6 +150,150 @@ Open `dist/renderer/outro.html?preview=1` in a browser to preview the animation 
 
 Moods: neutral, curious, thinking, confused, excited, surprise, humor, laugh, proud, innocent, smug, deception, malice,
 anger, annoyed, caught, sad, hurt, dismay, worried, bored, sleepy, glitch.
+
+## The MCP server (Claude Code)
+
+`metrik-mcp` is a stdio MCP server that gives Claude Code the same script
+toolchain Studio uses. `install.sh` installs it next to `mscript`; register it
+once:
+
+```
+claude mcp add metrik -- ~/.local/bin/metrik-mcp
+```
+
+Three rules shape it.
+
+**File-first.** Every script tool works with Studio closed, because that is when
+most script work happens. A running Studio only adds live state.
+
+**One semantics.** The tools call `src/shared/script.ts`, the same parser and
+serializer Studio and `mscript` use. The alternative was discovered the hard
+way: a separate Python patcher that spliced line ranges reported success on six
+edits it had silently skipped, because it mutated the array it was iterating.
+Tools that work on parsed entries cannot have that bug.
+
+**No devices.** There is no tool that records, renders, or opens a camera. Not
+as policy, as absence. A tool that can start a render is a tool that can start a
+second render on top of the first.
+
+| Tool | What it is for |
+| --- | --- |
+| `script_list` `script_outline` `script_get` `script_grep` | find your way around |
+| `script_edit_text` | change wording inside one entry; matches across the 70-char wrap and re-wraps after |
+| `script_set` `script_insert_marker` `script_remove` | structural edits |
+| `script_diff` | semantic diff by marker, because Studio reformats on save and a text diff is noise |
+| `script_check` | every rule in one pass, split into errors and advice |
+| `deck_check` `deck_remove_slide` | the deck invariant and the setup-header numbers |
+| `wb_preview` `wb_run` `keys_vocabulary` | the Workbench model, and MySQL |
+| `moods` `outro_preview` `lesson_bundle` | the rest of the format |
+| `studio_status` `studio_reload` `studio_notify` | the live app |
+| `studio_takes` | which markers were re-recorded |
+
+### Errors and advice
+
+`script_check` tags every finding. **Errors** are hard requirements: 70
+characters, unknown moods, marker discipline, a missing `Roll Intro`, `k:right`
+while Workbench has focus, an unmodelled keystroke, a coursework reference a
+public viewer cannot resolve, a British spelling, an em dash. **Advice** is a
+judgment call for a human: sentence fragments, verbless run-ups, AI tells,
+repeated openers.
+
+The split is not cosmetic. A rule about intent that *fails* gets silenced by
+editing the text, and twice in October the text edited that way was Jeromy's
+own. Advice is printed and never acted on automatically.
+
+### The keystroke vocabulary
+
+`src/shared/keys.ts` is the authoritative list, each key marked `verified`,
+`modelled` or `unknown`, with its gotcha. An unknown key is an **error** at
+write time, because a key the simulator cannot model is a key whose on-screen
+effect nobody has confirmed. This exists because `k:ctrl+shift+up` shipped in a
+script and was only noticed when the simulator crashed on it, after the lesson
+had been recorded.
+
+### wb_preview and wb_run
+
+Once a demo *edits* the statement on screen instead of retyping it, the SQL that
+reaches the server depends on cursor positions and counted backspaces.
+`wb_preview` replays the keystrokes through a model of the Workbench editor and
+prints the buffer at each Run; `wb_run` then puts each of those through a real
+MySQL. It never starts a container, so it cannot contend with a render.
+
+The editor model knows the three things that actually bite: `(` auto-closes and
+the pending `)` becomes a literal once Enter is pressed, `home` needs two
+presses to reach column zero, and a selection spanning lines collapses on the
+next keystroke.
+
+### studio_takes
+
+The production engine already stamps every logged event with `{ marker, take }`,
+and `reset()`/`rewind()` bump the take. So `session.json` has always known which
+markers were recorded more than once; nothing new had to be logged, it only had
+to be read. A marker recorded three times is a line that did not work out loud,
+which is the most direct feedback the writing gets.
+
+It settled a real question on its first run: `k:ctrl+shift+up` was marked
+`unknown` because Scintilla's default binding is paragraph-extend rather than
+one line per press. The take log showed marker 8800 recorded once with no
+retake, so three presses did move three lines, and the key moved to `verified`.
+
+### The bridge, and live updates
+
+`src/main/bridge.ts` opens a loopback HTTP port when Studio starts in GUI mode,
+with a random token written to `bridge.json` beside the config (mode 600,
+removed on exit). It answers `status`, `reload` and `notify` and nothing else.
+There is no op that can record, render, or open a device.
+
+`status` carries the three questions worth asking: **which script is open, does
+it have unsaved changes, and is what is on screen the file that is on disk.**
+The third is a content hash the renderer reports; dirty alone cannot tell
+"Jeromy has typed something" from "the window is showing a stale copy".
+
+**Every MCP write pushes itself to the window.** After a successful write the
+tool asks the bridge to reload that file, and the renderer re-reads it, diffs
+it by marker (`src/shared/diff.ts`) and flashes the markers that changed,
+scrolling the first one into view. The tool result says which of three things
+happened, because the difference matters:
+
+| result | meaning |
+| --- | --- |
+| `· Studio reloaded it on screen` | that script was open; the change is in front of you |
+| *(nothing)* | Studio is closed, or has a different script open |
+| `· Studio did NOT reload: …` | it is open **and dirty**; your copy wins, the disk has the edit |
+
+A write to a file Studio holds dirty is refused before it happens, so the last
+row is reachable only by racing a keystroke against the write.
+
+Only the open script reloads. An edit to another lesson changes nothing on
+screen, which is the behaviour you want: the open script is the one being
+worked on.
+
+## Checks in the window
+
+The script view runs `src/shared/check.ts` as you type: the same rules the MCP
+runs, from the same file, so the two cannot disagree about what is wrong with a
+line. Errors are listed in the strip under the editor; advice collapses behind
+a count and is styled quietly on purpose. The YAML pane adds a lint gutter,
+mapping each finding to the line that declares its marker.
+
+## Tests
+
+```
+npm test        # 58 unit cases, no window
+npm run test:e2e  # launches a throwaway Studio and drives it over the MCP
+```
+
+The unit cases cover the fragment rules, the two coursework tiers, the editor
+model, the marker diff, the round trip and the whole-script checks. Every case
+is something that went wrong once; the "must not flag" cases are the more
+valuable half, because an over-eager rule rewrites the author's own sentences.
+
+`test/e2e.mjs` is the only test that proves the live update works. It starts a
+real Electron instance with its own `--user-data-dir`, its own bridge file
+(`STUDIO_BRIDGE_FILE`), the OBS capture backend and Kokoro autostart off, so it
+touches no camera, no GPU and no container. Then it edits a script through the
+MCP server over real stdio JSON-RPC and asks the bridge what the window is
+showing.
 
 ## Glitch
 

@@ -11,7 +11,9 @@
     "build": "node build.mjs",
     "dev": "node build.mjs && electron . --ozone-platform-hint=auto",
     "start": "electron . --ozone-platform-hint=auto",
-    "dist": "node build.mjs && electron-builder --linux AppImage"
+    "dist": "node build.mjs && electron-builder --linux AppImage",
+    "test": "node build.mjs && node dist/cli/metrik-test.js",
+    "test:e2e": "node build.mjs && node test/e2e.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",

@@ -5,9 +5,11 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { yaml } from "@codemirror/lang-yaml";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
+import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { useStore, toast } from "../store";
 import { loadScriptFile, saveScript, setScriptText, updateScript, createScript } from "../script-io";
-import { Entry, markers, entriesAt, markerBetween, newId, validate, STEP_HELP, outroPhases, OUTRO_PHASES, cleanText } from "../../shared/script";
+import { Entry, markers, entriesAt, markerBetween, newId, parseScript, STEP_HELP, outroPhases, OUTRO_PHASES, cleanText } from "../../shared/script";
+import { checkScript, type Finding } from "../../shared/check";
 import { MOOD_NAMES } from "../../../glitch/moods";
 import type { ScriptFileInfo } from "../../shared/ipc";
 import { Assist } from "../components/assist";
@@ -29,7 +31,12 @@ export function ScriptView() {
     for (const f of files) if (!filter || (f.course + f.week + f.lesson).toLowerCase().includes(filter.toLowerCase())) (m.get(f.course) ?? m.set(f.course, []).get(f.course)!).push(f);
     return m;
   }, [files, filter]);
-  const issues = useMemo(() => validate(s.script), [s.script]);
+  // The same rules Claude runs through the MCP, run here as you type. One
+  // implementation (src/shared/check.ts) so the two can never disagree about
+  // what is wrong with a line.
+  const findings = useMemo(() => checkScript(s.script), [s.script]);
+  const errs = findings.filter((f) => f.severity === "error");
+  const advice = findings.filter((f) => f.severity === "advice");
   return (
     <div class="script-view">
       <div class="files">
@@ -50,14 +57,41 @@ export function ScriptView() {
           <button class={"btn sm" + (mode === "slots" ? " primary" : "")} onClick={() => setMode("slots")}>Slots</button>
           <button class={"btn sm" + (mode === "yaml" ? " primary" : "")} onClick={() => setMode("yaml")}>YAML</button>
           <span style="flex:1" />
-          <span class="muted mono" style="font-size:12px">{s.script.entries.length} entries · {markers(s.script).length} markers{issues.length ? ` · ${issues.length} issues` : ""}</span>
+          <span class="muted mono" style="font-size:12px">{s.script.entries.length} entries · {markers(s.script).length} markers{errs.length ? ` · ${errs.length} error${errs.length === 1 ? "" : "s"}` : ""}{advice.length ? ` · ${advice.length} advisory` : ""}</span>
           <button class="btn sm" onClick={() => updateScript((sc) => { const m = markers(sc); const start = m.length ? m[m.length - 1] + 100 : 100; sc.entries.push({ id: newId(), type: "line", actor: "Dev", start, end: start + 100, text: "" }); })}>+ marker</button>
           <button class="btn sm primary" disabled={!s.dirty} onClick={() => saveScript()}>Save <kbd>⌃S</kbd></button>
         </div>
         {mode === "slots" ? <SlotEditor /> : <YamlEditor />}
-        {(s.errors.length > 0 || issues.length > 0) && <div class="issues">{s.errors.map((e) => <div>⚠ {e}</div>)}{issues.slice(0, 20).map((i) => <div>• {i.msg}</div>)}</div>}
+        {(s.errors.length > 0 || findings.length > 0) && <Issues parse={s.errors} errors={errs} advice={advice} />}
       </div>
       <Assist />
+    </div>
+  );
+}
+
+/** Errors are things that will break a take. Advice is a judgment call and is
+ *  shown quieter on purpose: nothing here should ever be auto-applied to a
+ *  line Jeromy wrote. */
+function Issues({ parse, errors, advice }: { parse: string[]; errors: Finding[]; advice: Finding[] }) {
+  const [showAdvice, setShowAdvice] = useState(false);
+  const row = (f: Finding) => (
+    <div title={f.excerpt ?? ""}>
+      <span class="mono" style="opacity:.6">{f.marker != null ? String(f.marker).padStart(5) : "     "}</span>{" "}
+      <span class="mono" style="opacity:.5">[{f.rule}]</span> {f.msg}
+    </div>
+  );
+  return (
+    <div class="issues">
+      {parse.map((e) => <div>⚠ {e}</div>)}
+      {errors.slice(0, 20).map(row)}
+      {advice.length > 0 && (
+        <div class="advice">
+          <button class="btn sm ghost" style="padding:0 4px" onClick={() => setShowAdvice((v) => !v)}>
+            {showAdvice ? "▾" : "▸"} {advice.length} advisory
+          </button>
+          {showAdvice && <div style="padding-left:10px">{advice.slice(0, 40).map(row)}</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -85,15 +119,25 @@ function NewScript({ onDone }: { onDone: () => void }) {
 function SlotEditor() {
   const s = useStore();
   const ms = markers(s.script);
+  const body = useRef<HTMLDivElement>(null);
+  const changed = s.changed;
+  // When an outside edit lands, say where. Without this a live reload is
+  // indistinguishable from nothing having happened.
+  useEffect(() => {
+    if (!changed?.markers.length) return;
+    const el = body.current?.querySelector(`[data-marker="${changed.markers[0]}"]`);
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [changed?.at]);
+  const hot = new Set(changed?.markers ?? []);
   return (
-    <div class="body">
-      {ms.map((m) => <Slot key={m} marker={m} entries={entriesAt(s.script, m)} />)}
+    <div class="body" ref={body}>
+      {ms.map((m) => <Slot key={m} marker={m} entries={entriesAt(s.script, m)} hot={hot.has(m)} />)}
       {!ms.length && <div class="muted" style="padding:20px">Empty script. Add a marker, or ask the assistant to draft one.</div>}
     </div>
   );
 }
 
-function Slot({ marker, entries }: { marker: number; entries: Entry[] }) {
+function Slot({ marker, entries, hot }: { marker: number; entries: Entry[]; hot?: boolean }) {
   const has = (t: string) => entries.some((e) => e.type === t);
   const add = (type: Entry["type"]) => updateScript((sc) => {
     const end = entries[0]?.end ?? marker + 100; const base = { id: newId(), start: marker, end };
@@ -102,7 +146,7 @@ function Slot({ marker, entries }: { marker: number; entries: Entry[] }) {
   });
   const insertAfter = () => updateScript((sc) => { const m = markerBetween(sc, marker); sc.entries.push({ id: newId(), type: "line", actor: "Dev", start: m, end: entries[0]?.end ?? m + 100, text: "" }); });
   return (
-    <div class="slot">
+    <div class={"slot" + (hot ? " hot" : "")} data-marker={marker}>
       <div class="marker"><span>{marker}</span>
         <button onClick={() => add("line")} title="add dialogue">+line</button><button onClick={() => add("editor")} title="add editor note">+note</button><button onClick={() => add("keys")} title="add keys">+keys</button><button onClick={() => add("face")} title="add Glitch expression">+face</button><button onClick={() => add("slide")} title="add slide">+slide</button><button onClick={() => add("outro")} title="add the branded outro (last marker)">+outro</button>
         <button onClick={insertAfter} title="insert a marker after this one">↓ ins</button>
@@ -267,6 +311,34 @@ function OutroCell({ e, patch }: { e: Entry & { type: "outro" }; patch: (p: any)
   );
 }
 
+/** Map a finding to a position in the YAML: the line that declares its
+ *  marker (`start: 7000`). Findings carry markers, not byte offsets, because
+ *  every other consumer of them is reasoning about markers. */
+function findingDiagnostics(doc: string): Diagnostic[] {
+  const { script, errors } = parseScript(doc);
+  if (errors.length && !script.entries.length) return [];
+  const at = new Map<number, { from: number; to: number }>();
+  let pos = 0;
+  for (const line of doc.split("\n")) {
+    const m = /^\s*start:\s*(\d+)/.exec(line);
+    if (m && !at.has(+m[1])) at.set(+m[1], { from: pos, to: pos + line.length });
+    pos += line.length + 1;
+  }
+  const out: Diagnostic[] = [];
+  for (const f of checkScript(script)) {
+    const span = f.marker != null ? at.get(f.marker) : undefined;
+    out.push({
+      from: span?.from ?? 0,
+      to: span?.to ?? 0,
+      severity: f.severity === "error" ? "error" : "info",
+      source: f.rule,
+      message: f.excerpt ? `${f.msg}\n\n"${f.excerpt}"` : f.msg,
+    });
+  }
+  // CodeMirror wants them in document order; findings come out in rule order.
+  return out.sort((a, b) => a.from - b.from);
+}
+
 function YamlEditor() {
   const s = useStore();
   const host = useRef<HTMLDivElement>(null);
@@ -277,12 +349,20 @@ function YamlEditor() {
       state: EditorState.create({
         doc: s.scriptText,
         extensions: [lineNumbers(), highlightActiveLine(), history(), yaml(), syntaxHighlighting(defaultHighlightStyle), highlightSelectionMatches(), EditorView.theme({ "&": { background: "#0d0f17", color: "#ccd0e0" }, ".cm-gutters": { background: "#12141f", color: "#5a6280", border: "none" }, ".cm-activeLine": { background: "#1c2130" } }, { dark: true }),
+          lintGutter(), linter((lv) => findingDiagnostics(lv.state.doc.toString())),
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
           EditorView.updateListener.of((u) => { if (u.docChanged) setScriptText(u.state.doc.toString()); })],
       }),
     });
     view.current = v; return () => v.destroy();
   }, []);
-  useEffect(() => { const v = view.current; if (v && v.state.doc.toString() !== s.scriptText) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: s.scriptText } }); }, [s.scriptText]);
+  // An outside reload replaces the whole document. Keep the caret where it
+  // was (clamped) instead of throwing the reader back to the top of the file.
+  useEffect(() => {
+    const v = view.current;
+    if (!v || v.state.doc.toString() === s.scriptText) return;
+    const head = Math.min(v.state.selection.main.head, s.scriptText.length);
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: s.scriptText }, selection: { anchor: head } });
+  }, [s.scriptText]);
   return <div class="cm-wrap body" ref={host} />;
 }

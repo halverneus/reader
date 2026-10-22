@@ -98,6 +98,14 @@ if command -v kbuildsycoca6 >/dev/null; then kbuildsycoca6 >/dev/null 2>&1 || tr
 # the mscript CLI (Claude Code / shell editing of Script.yml files)
 if [[ -f dist/cli/mscript.js ]]; then printf '#!/usr/bin/env bash\nexec node "%s/dist/cli/mscript.js" "$@"\n' "$PWD" > "$BIN_DIR/mscript"; chmod 755 "$BIN_DIR/mscript"; log "Installed $BIN_DIR/mscript (script CLI)"; fi
 
+# the MCP server (Claude Code talks to the script toolchain through this)
+if [[ -f dist/cli/metrik-mcp.js ]]; then
+  printf '#!/usr/bin/env bash\nexec node "%s/dist/cli/metrik-mcp.js" "$@"\n' "$PWD" > "$BIN_DIR/metrik-mcp"
+  chmod 755 "$BIN_DIR/metrik-mcp"
+  log "Installed $BIN_DIR/metrik-mcp (MCP server). Register it once with:"
+  log "    claude mcp add metrik -- $BIN_DIR/metrik-mcp"
+fi
+
 # ── optional: matting image ───────────────────────────────────────────────────
 if [[ "${1:-}" == "--matte" ]]; then
   log "Building the metrik-matte Docker image (this downloads PyTorch + RVM weights)"
@@ -105,3 +113,4 @@ if [[ "${1:-}" == "--matte" ]]; then
 fi
 
 log "Done. 'Metrik Studio' is in the application menu; CLI: $TARGET [--post <dir> [step] | --obs-setup | --diagnose]"
+log "Script tooling: mscript (shell) and metrik-mcp (Claude Code)."

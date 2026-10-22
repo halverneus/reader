@@ -66,6 +66,11 @@ kbd{font-family:var(--mono);font-size:10px;color:var(--dim);margin-left:6px}
 .slots .body{flex:1;overflow:auto}
 .slot{display:grid;grid-template-columns:64px 1fr;border-bottom:1px solid var(--line)}
 .slot.current{background:#1c2130}
+/* A marker an outside tool just changed. Fades on its own: the point is to
+   catch the eye once, not to leave the script permanently decorated. */
+.slot.hot{animation:slot-hot 6s ease-out forwards}
+.slot.hot .marker{border-left:2px solid var(--teal);margin-left:-2px}
+@keyframes slot-hot{from{background:rgba(45,212,191,.22)}to{background:transparent}}
 .slot .marker{font-family:var(--mono);font-size:12px;color:var(--dim);padding:8px 10px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:4px;align-items:flex-start}
 .slot .marker button{background:transparent;border:none;color:var(--dim);padding:0;font-size:11px}
 .slot .marker button:hover{color:var(--teal)}
@@ -84,6 +89,11 @@ kbd{font-family:var(--mono);font-size:10px;color:var(--dim);margin-left:6px}
 .cm-wrap .cm-editor{height:100%;font-family:var(--mono);font-size:12.5px}
 .cm-wrap .cm-scroller{font-family:var(--mono)}
 .issues{padding:6px 12px;color:var(--rose);font-family:var(--mono);font-size:12px;border-top:1px solid var(--line);max-height:120px;overflow:auto}
+/* Advice is not an error and must not be dressed as one: a panel of red
+   suggestions is a panel nobody reads, and the ones worth acting on are
+   judgment calls about Jeromy's own wording. */
+.issues .advice{color:var(--muted)}
+.issues .advice button{color:var(--amber)}
 .assist{display:flex;flex-direction:column}
 .assist .log{flex:1;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:10px}
 .msg{border-radius:8px;padding:8px 10px;font-size:13px;white-space:pre-wrap}

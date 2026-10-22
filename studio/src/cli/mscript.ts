@@ -3,6 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseScript, serializeScript, markers, entriesAt, markerBetween, newId, validate, cleanText, outroPhases, Entry, Script } from "../shared/script";
+import { checkScript, errorsOf, type Finding } from "../shared/check";
+import { readDeck } from "../shared/deck";
 import { MOOD_NAMES, MOODS } from "../../glitch/moods";
 
 const HELP = `mscript — Metrik Studio script CLI
@@ -15,7 +17,8 @@ const HELP = `mscript — Metrik Studio script CLI
   mscript rm <file> <marker> [kind|all]        remove entries at a marker
   mscript ins <file> <after>                   new empty marker after <after> (halves the gap); prints its number
   mscript renumber <file>                      re-space all markers by 100
-  mscript validate <file>                      hard-requirement checks
+  mscript validate <file>                      hard-requirement checks (structure only)
+  mscript check <file> [--errors]              every rule: structure, voice, keys, deck
   mscript outro <file>                         show the resolved outro phases (defaults filled in)
   mscript moods                                list Glitch's moods
   mscript new <file> [lesson title]            write a fresh script from the standard template
@@ -114,6 +117,21 @@ function main(argv: string[]) {
     case "rm": { const marker = +rest[0], kind = rest[1] ?? "all"; const n = s.entries.length; s.entries = s.entries.filter((e) => !(e.start === marker && (kind === "all" || e.type === kind))); save(file, s); console.log(`removed ${n - s.entries.length}`); break; }
     case "ins": { const m = markerBetween(s, +rest[0]); console.log(m); break; }
     case "renumber": { const ms = markers(s), map = new Map(ms.map((m, i) => [m, (i + 1) * 100])); s.entries = s.entries.map((e) => ({ ...e, start: map.get(e.start)!, end: map.get(e.end) ?? map.get(e.start)! + 100 })); save(file, s); console.log(`renumbered ${ms.length} markers`); break; }
+    // The whole rule set in one place. Anything that generates a script --
+    // including the Python builders -- should shell out to this rather than
+    // keep its own copy of the rules, because a second copy is a copy that
+    // drifts. Exits non-zero when there is an error, so a generator can fail.
+    case "check": {
+      const deckFile = path.join(path.dirname(file), "Slides.html");
+      const info = fs.existsSync(deckFile) ? readDeck(deckFile) : null;
+      let f: Finding[] = checkScript(s, info ? { deck: { slides: info.slides, holds: info.holds } } : {});
+      if (rest.includes("--errors")) f = errorsOf(f);
+      if (rest.includes("--json")) { console.log(JSON.stringify(f, null, 1)); }
+      else if (!f.length) console.log("clean");
+      else for (const x of f) console.log(`${x.severity === "error" ? "x" : "?"} ${x.marker != null ? String(x.marker).padStart(6) : "      "} [${x.rule}] ${x.msg}${x.excerpt ? `\n           "${x.excerpt}"` : ""}`);
+      if (errorsOf(f).length) process.exitCode = 1;
+      break;
+    }
     case "validate": { const v = validate(s); if (!v.length) console.log("clean"); else { for (const x of v) console.log("- " + x.msg); process.exitCode = 1; } break; }
     case "outro": { const o = s.entries.find((e) => e.type === "outro"); if (!o || o.type !== "outro") { console.log("no outro entry"); break; } for (const p of outroPhases(o)) console.log(`${p.phase.padEnd(9)} [${p.mood}] ${p.title}${p.subtitle ? " · " + p.subtitle : ""}${p.names.length ? " · " + p.names.join(", ") : ""}\n          ${p.text.replace(/\n/g, "\n          ")}`); break; }
     default: throw new Error("unknown command " + cmd + "\n" + HELP);

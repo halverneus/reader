@@ -7,6 +7,7 @@ import { broadcast } from "./index";
 import { runPipeline } from "./post/pipeline";
 import { pickThumbnail, projectUnedited } from "./post/kdenlive";
 import { currentSession } from "./session";
+import { setPost } from "./bridge";
 
 export interface SessionRow { dir: string; name: string; started: string; takes: number; hasDesktop: boolean; hasCam: boolean; hasMatte: boolean; hasGlitch: boolean; hasOutro: boolean; hasProject: boolean; hasRender: boolean }
 
@@ -16,7 +17,12 @@ function notify(title: string, body: string) {
 }
 async function runAndNotify(dir: string, what: string) {
   try {
-    await runPipeline(dir, what, (steps) => broadcast("post:step", steps), (line) => broadcast("post:log", line));
+    await runPipeline(dir, what, (steps) => {
+      broadcast("post:step", steps);
+      const i = steps.findIndex((s) => s.state === "running");
+      const cur = i >= 0 ? steps[i] : steps.filter((s) => s.state !== "idle").at(-1);
+      if (cur) setPost({ step: cur.id, index: (i >= 0 ? i : steps.indexOf(cur)) + 1, total: steps.length, state: cur.state });
+    }, (line) => broadcast("post:log", line));
     if (what === "all" || what === "render") {
       let video = ""; try { video = JSON.parse(fs.readFileSync(path.join(dir, "session.json"), "utf8")).meta.render ?? ""; } catch {}
       const rendered = what === "render" || loadConfig().post?.autoRender;
@@ -24,6 +30,7 @@ async function runAndNotify(dir: string, what: string) {
     }
   } catch (e: any) {
     if (what === "all" || what === "render") notify("Metrik Studio — post failed", e.message);
+    setPost(undefined);
     throw e;
   }
 }
