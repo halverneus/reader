@@ -184,6 +184,12 @@ const sentences = (t: string) => t.split(/(?<=[.!?])(?<!\b\d\.)\s+/).map((s) => 
 // ── the checker ──────────────────────────────────────────────────────────────
 export interface CheckOptions { deck?: { slides: number; holds: number } }
 
+/** Capitalised words a Glitch line may keep. ID is deliberate and has a
+ *  pronunciation of its own; the rest are acronyms read as words anyway. */
+// NULL is deliberately absent: the house style is "null" lowercase in a
+// spoken line, so a capitalised one is a real hit.
+export const CAPS_OK = new Set(["ID", "IDS", "SQL", "OK", "AI", "CPU", "GPU", "API", "CSV", "JSON", "URL", "PDF", "HTML", "UTC"]);
+
 export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
   const f: Finding[] = [];
   const err = (rule: string, msg: string, e?: Entry, excerpt?: string) =>
@@ -244,6 +250,21 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
       if (e.type === "line" && (e as any).actor === "Glitch" && !e.auto) err("marker", "Glitch line must be auto", e);
       if (e.type === "editor" && /Roll Intro/.test((e as any).text) && e.auto) err("marker", "Roll Intro must never be auto", e);
     }
+  }
+
+  // ── ALL-CAPS in a spoken Glitch line.
+  //
+  // Kokoro reads a run of capitals letter by letter, so "NOT IN" comes out as
+  // "en oh tee eye en". Jeromy has been fixing these by hand one script at a
+  // time; the house style is the keyword quoted and lowercase, which reads
+  // correctly AND tells the listener it is a keyword. "ID" is the standing
+  // exception: it is DELIBERATELY uppercase and has its own pronunciation.
+  for (const e of s.entries) {
+    if (e.type !== "line" || (e as any).actor !== "Glitch") continue;
+    const text = cleanText((e as any).text);
+    const caps = [...new Set((text.match(/\b[A-Z]{2,}\b/g) ?? []).filter((w) => !CAPS_OK.has(w)))];
+    if (caps.length)
+      err("caps", `Glitch says ${caps.map((c) => `"${c}"`).join(", ")} in capitals; the voice spells those out. Write them quoted and lowercase, as ${caps.map((c) => `"${c.toLowerCase()}"`).join(", ")}`, e);
   }
 
   // ── Roll Intro. Seven of eight Week 06 scripts shipped without one because

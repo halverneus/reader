@@ -208,10 +208,10 @@ tools.push({
 
 tools.push({
   name: "script_grep",
-  description: "Search every text and keystroke in a script (or every script under the courses root) for a regex.",
-  inputSchema: S({ pattern: str("JavaScript regex, case-insensitive"), file: str("one Script.yml; omit to search them all") }, ["pattern"]),
-  run({ pattern, file }) {
-    const re = new RegExp(pattern, "i");
+  description: "Search every text and keystroke in a script (or every script under the courses root) for a regex. Case-insensitive unless you ask otherwise, which matters for anything hunting capitals.",
+  inputSchema: S({ pattern: str("JavaScript regex"), file: str("one Script.yml; omit to search them all"), matchCase: bool("respect capitals (default false)") }, ["pattern"]),
+  run({ pattern, file, matchCase }) {
+    const re = new RegExp(pattern, matchCase ? "" : "i");
     const files = file ? [file] : listScripts().map((r) => r.path);
     const out: string[] = [];
     for (const f of files) {

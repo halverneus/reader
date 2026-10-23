@@ -240,6 +240,42 @@ group("replay");
   ok(unknown.length === 0, "no unknown keys");
 }
 
+// ── ALL-CAPS in a spoken line ───────────────────────────────────────────────
+group("caps in Glitch's lines");
+{
+  const g = (text: string) => `script:
+- type: "editor"
+  start: 100
+  end: 200
+  text: "Roll Intro"
+- type: "line"
+  actor: "Glitch"
+  start: 200
+  end: 300
+  auto: true
+  text: ${JSON.stringify(text)}
+`;
+  const caps = (text: string) => errorsOf(checkText(g(text))).filter((x) => x.rule === "caps");
+  ok(caps("IN can stop early and NOT IN cannot.").length === 1, "a bare keyword in capitals is an error");
+  ok(caps('That means "in" can stop early and "not in" cannot.').length === 0, "quoted and lowercase is the fix");
+  ok(caps("It says the line item's invoice ID equals the outer invoice's ID.").length === 0, "ID stays uppercase: it is deliberate");
+  ok(caps("Two is different from NULL, so nothing comes back.").length === 1, "NULL is NOT exempt; the house style is lowercase");
+  ok(caps("The optimizer knows the answer.").length === 0, "ordinary prose passes");
+  // Dev reads his own lines, so capitals there are emphasis, not a defect
+  const devCaps = `script:
+- type: "editor"
+  start: 100
+  end: 200
+  text: "Roll Intro"
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "NOT IN has one correct fix and this is it."
+`;
+  ok(errorsOf(checkText(devCaps)).filter((x) => x.rule === "caps").length === 0, "Dev may use capitals: he reads his own lines");
+}
+
 // ── marker diff (what the live GUI update highlights) ───────────────────────
 group("marker diff");
 {
