@@ -143,6 +143,22 @@ try {
   ok(refused?.applied === false, "a reload of a script that is not open is reported as not applied", JSON.stringify(refused));
 
   ok(/e2e notice/.test((await askBridge("notify", { text: "e2e notice" })) ? "e2e notice" : ""), "notify is accepted");
+
+  // ── stdin closing must not eat a reply ─────────────────────────────────────
+  // Found 2026-10-23 by probing the server from a shell pipe: the transport
+  // exited on stdin close and the in-flight studio_status answer vanished.
+  // A real client keeps stdin open, so nothing would have caught this until
+  // a tool call happened to be slow at the wrong moment.
+  {
+    const one = spawn("node", ["dist/cli/metrik-mcp.js"], { cwd: STUDIO, env, stdio: ["pipe", "pipe", "ignore"] });
+    let seen = "";
+    one.stdout.on("data", (d) => (seen += d));
+    one.stdin.end(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "p", version: "0" } } }) + "\n" +
+      JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "studio_status", arguments: {} } }) + "\n");
+    await new Promise((r) => one.on("close", r));
+    ok(/"id":2/.test(seen), "a reply still in flight survives stdin closing", seen.slice(0, 200));
+  }
 } finally {
   mcp.kill();
   app.kill("SIGTERM");

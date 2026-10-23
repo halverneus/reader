@@ -22,6 +22,13 @@ export function serve(name: string, version: string, tools: Tool[]) {
   const send = (msg: any) => process.stdout.write(JSON.stringify(msg) + "\n");
   const log = (s: string) => process.stderr.write(`[metrik-mcp] ${s}\n`);
 
+  // A tool call is async (some of them wait on Studio over the bridge). If
+  // stdin closes while one is in flight, exiting immediately throws its reply
+  // away and the caller sees silence rather than an answer or an error.
+  let inFlight = 0;
+  let closed = false;
+  const settle = () => { if (closed && inFlight === 0) process.exit(0); };
+
   const rl = readline.createInterface({ input: process.stdin });
   rl.on("line", async (line) => {
     const raw = line.trim();
@@ -46,11 +53,14 @@ export function serve(name: string, version: string, tools: Tool[]) {
         case "tools/call": {
           const t = byName.get(params?.name);
           if (!t) return fail(-32602, `unknown tool "${params?.name}"`);
+          inFlight++;
           try {
             const text = await t.run(params?.arguments ?? {});
             return reply({ content: [{ type: "text", text: text || "(no output)" }] });
           } catch (e: any) {
             return reply({ content: [{ type: "text", text: `error: ${e?.message ?? String(e)}` }], isError: true });
+          } finally {
+            inFlight--; settle();
           }
         }
         default:
@@ -62,6 +72,11 @@ export function serve(name: string, version: string, tools: Tool[]) {
     }
   });
 
-  rl.on("close", () => process.exit(0));
+  rl.on("close", () => {
+    closed = true;
+    settle();
+    // never hang on a tool that will not come back
+    setTimeout(() => process.exit(0), 10_000).unref();
+  });
   log(`${name} ${version} ready (${tools.length} tools)`);
 }
