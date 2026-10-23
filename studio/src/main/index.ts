@@ -11,7 +11,7 @@ import { registerCaptureIpc, capture } from "./capture";
 import { registerAssistIpc } from "./assist";
 import { registerPostIpc } from "./post";
 import { registerDiagnoseIpc } from "./diagnose";
-import { startBridge, stopBridge, setOpenScript } from "./bridge";
+import { startBridge, stopBridge, setOpenScript, registerBridgeIpc } from "./bridge";
 
 let win: BrowserWindow | null = null;
 let headlessMode = false;
@@ -102,7 +102,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("bridge:state", (_e, f: string | undefined, dirty: boolean, hash?: string) => setOpenScript(f, dirty, hash));
   // guiMode only: a --diagnose or STUDIO_SHOT run must not overwrite the
   // bridge file of the real instance and then delete it on the way out
-  if (guiMode) startBridge();
+  if (guiMode) { registerBridgeIpc(); startBridge(); }
   createWindow();
 
   // Background services: Kokoro TTS container + the capture engine (or OBS connection attempts on the legacy backend)

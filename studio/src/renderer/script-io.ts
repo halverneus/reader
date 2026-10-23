@@ -1,5 +1,5 @@
 import { parseScript, serializeScript, Script } from "../shared/script";
-import { markerDiff } from "../shared/diff";
+import { markerDiff, textHash } from "../shared/diff";
 import { getState, setState, toast } from "./store";
 
 export async function loadScriptFile(p: string, opts: { diff?: boolean } = {}) {
@@ -65,4 +65,28 @@ export function installBridgeListeners() {
     toast(n ? `Claude updated ${n} marker${n === 1 ? "" : "s"}: ${d!.touched.slice(0, 6).join(", ")}${n > 6 ? "…" : ""}` : "Reloaded from disk", "ok");
   });
   window.studio.on("bridge:notify", (text: string) => toast(text, "info"));
+
+  // Questions main cannot answer from its own cached state, because the
+  // buffer lives here. Reading it is what lets an outside tool work with
+  // UNSAVED text instead of telling Jeromy to go and save first.
+  window.studio.on("bridge:request", ({ id, op, params }: { id: number; op: string; params: any }) => {
+    const answer = (payload: any) => window.studio.invoke("bridge:reply", id, payload).catch(() => {});
+    const { scriptPath, scriptText, dirty } = getState();
+
+    if (op === "buffer") {
+      return answer({ path: scriptPath, text: scriptText, hash: textHash(scriptText), dirty });
+    }
+
+    if (op === "apply") {
+      // compare-and-swap: if the text moved since it was read, the caller's
+      // edit was computed against something that no longer exists
+      if (params?.expectHash && textHash(scriptText) !== params.expectHash)
+        return answer({ applied: false, reason: "the buffer changed after it was read" });
+      setScriptText(String(params?.text ?? ""));
+      toast("Claude edited this script. It is unsaved: Ctrl+Z undoes it, Ctrl+S keeps it.", "info", true);
+      return answer({ applied: true });
+    }
+
+    answer({ error: `unknown request "${op}"` });
+  });
 }

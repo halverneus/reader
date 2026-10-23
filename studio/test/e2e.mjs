@@ -135,6 +135,38 @@ try {
   await sleep(700);
   ok((await askBridge("status"))?.hash === hashBefore, "and the open script on screen is untouched");
 
+  // ── unsaved work: read it, edit it, never clobber it ───────────────────────
+  // Jeromy types a change and does not save. Before this existed, every
+  // script tool refused and the only way forward was "go and press Ctrl+S".
+  const typed = (await askBridge("buffer")).text.replace("will not be touched", "he typed this and did not save");
+  const put = await askBridge("apply", { file: script, text: typed });   // stand in for his keystrokes
+  ok(put?.applied === true, "the harness can dirty the buffer", JSON.stringify(put));
+  await sleep(400);
+  ok((await askBridge("status"))?.dirty === true, "and Studio now reports unsaved changes");
+
+  const seen = await call("script_get", { file: script, from: 300 });
+  ok(/UNSAVED buffer/.test(seen), "a read says it is reading the unsaved buffer", seen.slice(0, 120));
+  ok(/he typed this and did not save/.test(seen), "and it returns what is on screen, not what is on disk");
+  ok(!/he typed this/.test(fs.readFileSync(script, "utf8")), "the file on disk still has the old text");
+
+  const live = await call("script_edit_text", {
+    file: script, marker: 300, old: "he typed this and did not save", new: "Claude edited his unsaved line",
+  });
+  ok(/UNSAVED buffer/.test(live), "the edit reports that it went into the buffer", live);
+  await sleep(500);
+  const after = (await askBridge("buffer")).text;
+  ok(/Claude edited his unsaved line/.test(after), "the window now holds the edit");
+  ok(!/Claude edited his unsaved line/.test(fs.readFileSync(script, "utf8")), "and it is still NOT on disk: his to save or undo");
+  ok((await askBridge("status"))?.dirty === true, "the buffer is still dirty, so nothing was silently committed");
+
+  // compare-and-swap: an edit computed against text that has since moved on
+  const stale = await askBridge("apply", { file: script, text: after, expectHash: "deadbeef" });
+  ok(stale?.applied === false && /changed/.test(stale?.reason ?? ""), "a stale write is refused, not merged", JSON.stringify(stale));
+
+  // put it back so the later assertions see a clean window
+  await askBridge("apply", { file: script, text: fs.readFileSync(script, "utf8") });
+  await call("script_edit_text", { file: script, marker: 300, old: "stay where it is", new: "not be touched" }).catch(() => {});
+
   // ── the honest no-op ───────────────────────────────────────────────────────
   // A reload of something Studio does not have open must report applied:false
   // rather than ok:true. Reporting it as a success is what once taught an

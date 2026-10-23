@@ -249,6 +249,25 @@ it have unsaved changes, and is what is on screen the file that is on disk.**
 The third is a content hash the renderer reports; dirty alone cannot tell
 "Jeromy has typed something" from "the window is showing a stale copy".
 
+### Unsaved work is not a wall
+
+`buffer` and `apply` reach the text in the window, saved or not. The renderer
+owns it, so both are a round trip to the renderer rather than a mirror kept in
+main: a mirror is a second copy of the truth, and this file exists because of
+what second copies do.
+
+When Studio holds unsaved changes in a file, **the file on disk is not the
+script** -- it is the script as it was before Jeromy started typing. So the
+script tools read the buffer instead, and say so in their output; reporting on
+disk text in that state answers a question nobody asked. Writes go back the
+same way, compare-and-swap on the hash that was read, so an edit computed
+against text he has since changed is refused rather than landed on top of it.
+The result stays **dirty on purpose**: one Ctrl+Z undoes it, Ctrl+S keeps it,
+and the decision is his.
+
+If the buffer is dirty and cannot be read, or does not parse yet because he is
+mid-sentence, the tools refuse. They never quietly fall back to the stale file.
+
 **Every MCP write pushes itself to the window.** After a successful write the
 tool asks the bridge to reload that file, and the renderer re-reads it, diffs
 it by marker (`src/shared/diff.ts`) and flashes the markers that changed,
@@ -259,10 +278,7 @@ happened, because the difference matters:
 | --- | --- |
 | `· Studio reloaded it on screen` | that script was open; the change is in front of you |
 | *(nothing)* | Studio is closed, or has a different script open |
-| `· Studio did NOT reload: …` | it is open **and dirty**; your copy wins, the disk has the edit |
-
-A write to a file Studio holds dirty is refused before it happens, so the last
-row is reachable only by racing a keystroke against the write.
+| `· applied to Studio's UNSAVED buffer` | it was open and dirty; the edit went into the window |
 
 Only the open script reloads. An edit to another lesson changes nothing on
 screen, which is the behaviour you want: the open script is the one being
@@ -279,7 +295,7 @@ mapping each finding to the line that declares its marker.
 ## Tests
 
 ```
-npm test        # 58 unit cases, no window
+npm test          # 58 unit cases, no window
 npm run test:e2e  # launches a throwaway Studio and drives it over the MCP
 ```
 

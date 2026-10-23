@@ -72,17 +72,45 @@ async function pushed(file: string): Promise<string> {
   return `\n  · Studio did NOT reload: ${r.reason}`;
 }
 
-/** Write, then push. Every write path goes through here so none can forget. */
-async function saveAndPush(file: string, s: Script): Promise<string> {
-  save(file, s);
-  return pushed(file);
+/**
+ * Where a script is being read from. When Studio holds unsaved changes, the
+ * file on disk is NOT the script -- it is the script as it was before Jeromy
+ * started typing. Reading disk in that state answers a question nobody asked,
+ * and writing to it throws his work away on his next save.
+ */
+interface Source { script: Script; text: string; hash?: string; live: boolean }
+
+async function open(file: string): Promise<Source> {
+  const b = await ask<{ ok: boolean; open?: boolean; dirty?: boolean; text?: string; hash?: string; reason?: string }>("buffer", { file });
+  if (b?.open && b.dirty) {
+    if (!b.ok || typeof b.text !== "string")
+      throw new Error(`Studio holds unsaved changes in this file and its buffer could not be read (${b?.reason ?? "no answer"}). Refusing to fall back to the copy on disk, which is stale.`);
+    const { script, errors } = parseScript(b.text);
+    if (errors.length)
+      throw new Error(`Studio's unsaved copy does not parse yet (${errors.join("; ")}). Finish the edit in the window, or save and I will work from the file.`);
+    return { script, text: b.text, hash: b.hash, live: true };
+  }
+  const text = read(file);
+  const { script, errors } = parseScript(text);
+  if (errors.length) process.stderr.write(`[metrik-mcp] ${file}: ${errors.join("; ")}\n`);
+  return { script, text, live: false };
 }
 
-/** Refuse to write a file Studio is holding with unsaved changes. */
-async function guardWrite(file: string): Promise<void> {
-  const st = await ask<{ openScript?: string; dirty?: boolean }>("status");
-  if (st?.openScript && path.resolve(st.openScript) === path.resolve(file) && st.dirty)
-    throw new Error(`Metrik Studio has unsaved changes in this file. Save or close it first, or the edit will be lost on its next save.`);
+/** A banner for anything read out of the window rather than off the disk.
+ *  Unlabelled, I would report on text that does not exist in the file. */
+const liveNote = (src: Source) => src.live ? "(reading Studio's UNSAVED buffer, not the file on disk)\n" : "";
+
+/**
+ * Write a script back where it came from. Into the window when that is where
+ * the truth is: compare-and-swap on the hash that was read, so an edit
+ * computed against text he has since changed is refused instead of landing on
+ * top of it. Otherwise to disk, plus a nudge so the window re-reads it.
+ */
+async function commit(file: string, src: Source, s: Script): Promise<string> {
+  if (!src.live) { save(file, s); return pushed(file); }
+  const r = await ask<{ ok: boolean; applied?: boolean; reason?: string }>("apply", { file, text: serializeScript(s), expectHash: src.hash });
+  if (r?.applied) return "\n  · applied to Studio's UNSAVED buffer. Ctrl+Z undoes it, Ctrl+S keeps it.";
+  throw new Error(`could not apply to Studio's buffer: ${r?.reason ?? "the window did not answer"}. Nothing was written.`);
 }
 
 const wrap70 = (t: string) => {
@@ -161,9 +189,9 @@ tools.push({
   name: "script_outline",
   description: "One line per marker: the marker number and a summary of every entry on it. The fastest way to see a script's shape.",
   inputSchema: S({ file: str("path to Script.yml") }, ["file"]),
-  run({ file }) {
-    const s = load(file);
-    return markers(s).map((m) => `${String(m).padStart(6)}  ${entriesAt(s, m).map(brief).join("  |  ")}`).join("\n");
+  async run({ file }) {
+    const src = await open(file); const s = src.script;
+    return liveNote(src) + markers(s).map((m) => `${String(m).padStart(6)}  ${entriesAt(s, m).map(brief).join("  |  ")}`).join("\n");
   },
 });
 
@@ -171,10 +199,10 @@ tools.push({
   name: "script_get",
   description: "Entries in a marker range, as JSON. Use before editing so the edit is placed against what is actually there.",
   inputSchema: S({ file: str("path to Script.yml"), from: int("first marker"), to: int("last marker (defaults to `from`)") }, ["file", "from"]),
-  run({ file, from, to }) {
-    const s = load(file);
+  async run({ file, from, to }) {
+    const src = await open(file); const s = src.script;
     const a = Number(from), b = to != null ? Number(to) : Number(from);
-    return JSON.stringify(s.entries.filter((e) => e.start >= a && e.start <= b).map(({ id, ...e }) => e), null, 1);
+    return liveNote(src) + JSON.stringify(s.entries.filter((e) => e.start >= a && e.start <= b).map(({ id, ...e }) => e), null, 1);
   },
 });
 
@@ -201,15 +229,14 @@ tools.push({
 tools.push({
   name: "script_edit_text",
   description:
-    "Replace a substring inside ONE entry's text, leaving everything else alone. `old` must appear exactly once in that entry or nothing is written. Line entries are re-wrapped to 70 characters; editor entries keep their line structure. This is the right tool for a wording change -- it cannot disturb markers, keystrokes or neighbouring entries.",
+    "Replace a substring inside ONE entry's text, leaving everything else alone. `old` must appear exactly once in that entry or nothing is written. Line entries are re-wrapped to 70 characters; editor entries keep their line structure. This is the right tool for a wording change -- it cannot disturb markers, keystrokes or neighbouring entries. When Studio has the file open with unsaved changes, the edit is read from and applied to that buffer instead of the file, so his in-progress work is neither ignored nor overwritten; he then undoes or saves it.",
   inputSchema: S({
     file: str("path to Script.yml"), marker: int("the entry's start marker"),
     old: str("exact text to replace"), new: str("replacement (empty string deletes)"),
     actor: str("Dev or Glitch, when the marker holds both"),
   }, ["file", "marker", "old", "new"]),
   async run({ file, marker, old, new: rep, actor }) {
-    await guardWrite(file);
-    const s = load(file);
+    const src = await open(file); const s = src.script;
     const cands = entriesAt(s, Number(marker)).filter((e) => (e as any).text != null && (!actor || (e as any).actor === actor));
     if (!cands.length) throw new Error(`no text entry at marker ${marker}${actor ? ` for ${actor}` : ""}`);
     // Stored text is hard-wrapped at 70, so a phrase that happens to straddle a
@@ -235,7 +262,7 @@ tools.push({
       if (n > 1) throw new Error(`"${String(old).slice(0, 40)}" appears ${n} times in that entry; make it unique`);
       e.text = (e.text as string).replace(old, rep);
     }
-    const push = await saveAndPush(file, s);
+    const push = await commit(file, src, s);
     const errs = errorsOf(checkScript(s)).filter((x) => x.marker === Number(marker));
     return `ok ${marker} ${brief(e)}` + (errs.length ? `\nWARNING, this entry now has errors:\n${errs.map((x) => "  x " + x.msg).join("\n")}` : "") + push;
   },
@@ -250,8 +277,7 @@ tools.push({
     data: { type: "object", description: 'fields for the kind, e.g. {"actor":"Dev","text":"..."} or {"keystrokes":["k:escape"]}' },
   }, ["file", "marker", "kind", "data"]),
   async run({ file, marker, kind, data }) {
-    await guardWrite(file);
-    const s = load(file);
+    const src = await open(file); const s = src.script;
     const m = Number(marker);
     const d = data ?? {};
     const existing = entriesAt(s, m);
@@ -268,7 +294,7 @@ tools.push({
     const i = s.entries.findIndex((x) => x.start === m && x.type === kind && (kind !== "line" || (x as any).actor === (e as any).actor));
     if (i >= 0) s.entries[i] = e; else s.entries.push(e);
     s.entries.sort((a, b) => a.start - b.start);
-    return `ok ${m} ${brief(e)}` + (await saveAndPush(file, s));
+    return `ok ${m} ${brief(e)}` + (await commit(file, src, s));
   },
 });
 
@@ -276,7 +302,7 @@ tools.push({
   name: "script_insert_marker",
   description: "Reserve a new marker after an existing one, halving the gap so nothing downstream has to be renumbered. Returns the new marker number.",
   inputSchema: S({ file: str("path to Script.yml"), after: int("the marker to insert after") }, ["file", "after"]),
-  run({ file, after }) { return String(markerBetween(load(file), Number(after))); },
+  async run({ file, after }) { return String(markerBetween((await open(file)).script, Number(after))); },
 });
 
 tools.push({
@@ -284,11 +310,10 @@ tools.push({
   description: "Remove entries at a marker, by kind or all of them.",
   inputSchema: S({ file: str("path to Script.yml"), marker: int("start marker"), kind: str("one kind, or omit for all") }, ["file", "marker"]),
   async run({ file, marker, kind }) {
-    await guardWrite(file);
-    const s = load(file);
+    const src = await open(file); const s = src.script;
     const before = s.entries.length;
     s.entries = s.entries.filter((e) => !(e.start === Number(marker) && (!kind || e.type === kind)));
-    return `removed ${before - s.entries.length}` + (await saveAndPush(file, s));
+    return `removed ${before - s.entries.length}` + (await commit(file, src, s));
   },
 });
 
@@ -315,14 +340,14 @@ tools.push({
   description:
     "Every rule in one pass: hard requirements (70 chars, moods, marker discipline, Roll Intro, focus, unmodelled keystrokes, coursework references, British spellings, em dashes) plus advisory voice checks (sentence fragments, verbless run-ups, AI tells, repeated openers, flat agreements). ERRORS must be fixed. ADVICE is a judgment call for a human and must never be auto-applied to Jeromy's own wording.",
   inputSchema: S({ file: str("path to Script.yml; its Slides.html is used for the deck invariant if present"), errorsOnly: bool("hide the advisory tier") }, ["file"]),
-  run({ file, errorsOnly }) {
-    const s = load(file);
+  async run({ file, errorsOnly }) {
+    const src = await open(file); const s = src.script;
     const deckFile = path.join(path.dirname(file), "Slides.html");
     const info = fs.existsSync(deckFile) ? readDeck(deckFile) : null;
     let f = checkScript(s, info ? { deck: { slides: info.slides, holds: info.holds } } : {});
     if (info) f = f.concat(checkDeck(path.dirname(file)).findings.filter((x) => x.rule === "setup-header"));
     if (errorsOnly) f = errorsOf(f);
-    return fmtFindings(f, path.basename(path.dirname(file)));
+    return liveNote(src) + fmtFindings(f, path.basename(path.dirname(file)));
   },
 });
 
@@ -361,15 +386,16 @@ tools.push({
   description:
     "Replay the script's keystrokes through a model of the MySQL Workbench editor and show the buffer at every Run. Use this whenever a demo EDITS the statement on screen instead of retyping it, because then the SQL that reaches the server depends on cursor positions and counted backspaces.",
   inputSchema: S({ file: str("path to Script.yml") }, ["file"]),
-  run({ file }) {
-    const { runs, unknown } = replay(load(file));
+  async run({ file }) {
+    const src = await open(file);
+    const { runs, unknown } = replay(src.script);
     const out: string[] = [];
     if (unknown.length) out.push("UNMODELLED KEYSTROKES (the buffer below is incomplete):", ...unknown.map((u) => `  marker ${u.marker}: k:${u.key}`), "");
     for (const r of runs) {
       out.push(`----- Run ${r.run} (marker ${r.marker}) -----`, r.sql);
       if (SUSPICIOUS.test(r.sql)) out.push("  ^^ SUSPICIOUS ending: a counted edit probably went wrong");
     }
-    return out.join("\n") || "no Run steps in this script";
+    return liveNote(src) + (out.join("\n") || "no Run steps in this script");
   },
 });
 
@@ -447,7 +473,7 @@ tools.push({
 tools.push({
   name: "studio_status",
   description:
-    "What Metrik Studio is doing right now: whether it is running, which script is open, whether that script has unsaved changes, whether a recording is live, and how far along the post pipeline is. Check this before writing to a script -- an open file with unsaved changes will overwrite your edit when Jeromy saves.",
+    "What Metrik Studio is doing right now: whether it is running, which script is open, whether it has unsaved changes, whether what is on screen matches the file on disk, whether a recording is live, and how far along the post pipeline is. You do not need to check this before editing -- the script tools read and write Studio's unsaved buffer by themselves when it has one.",
   inputSchema: S({}),
   async run() {
     const b = readBridge();
