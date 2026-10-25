@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseScript, serializeScript, markers, entriesAt, markerBetween, newId, validate, cleanText, outroPhases, wrap70, closeGapBefore, Entry, Script } from "../shared/script";
+import { crossRepeats } from "../shared/across";
 import { checkScript, errorsOf, type Finding } from "../shared/check";
 import { readDeck } from "../shared/deck";
 import { MOOD_NAMES, MOODS } from "../../glitch/moods";
@@ -19,6 +20,7 @@ const HELP = `mscript — Metrik Studio script CLI
   mscript renumber <file>                      re-space all markers by 100
   mscript validate <file>                      hard-requirement checks (structure only)
   mscript check <file> [--errors]              every rule: structure, voice, keys, deck
+  mscript across <dir>                         lines repeated BETWEEN lessons under <dir>
   mscript outro <file>                         show the resolved outro phases (defaults filled in)
   mscript moods                                list Glitch's moods
   mscript new <file> [lesson title]            write a fresh script from the standard template
@@ -90,6 +92,22 @@ function main(argv: string[]) {
   if (!cmd || cmd === "doc" || cmd === "help" || cmd === "-h" || cmd === "--help") { console.log(HELP); return; }
   if (cmd === "moods") { for (const [k, m] of Object.entries(MOODS)) console.log(`${k.padEnd(10)} ${m.label.padEnd(10)} ${m.group.padEnd(9)} ${m.quote}`); return; }
   if (!file) throw new Error("file required");
+  if (cmd === "across") {
+    // A per-file checker cannot see a sentence that opens the demo in every
+    // lesson of the week. This walks the lessons and reports what recurs.
+    const dirs = fs.readdirSync(file, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && fs.existsSync(path.join(file, d.name, "Script.yml")))
+      .map((d) => d.name).sort();
+    const lessons = dirs.map((name) => ({ name, script: load(path.join(file, name, "Script.yml")) }));
+    const found = crossRepeats(lessons);
+    if (!found.length) { console.log(`no lines shared between ${lessons.length} lessons`); return; }
+    for (const f of found) {
+      console.log(`\n${f.kind === "exact" ? "same sentence" : "same opening"}: "${f.sample.slice(0, 76)}"`);
+      for (const a of f.at) console.log(`   ${a.lesson.slice(0, 22).padEnd(22)} ${String(a.marker).padStart(6)}  ${a.actor}`);
+    }
+    console.log(`\n${found.length} shared across ${lessons.length} lessons`);
+    return;
+  }
   if (cmd === "new") { if (fs.existsSync(file)) throw new Error("exists: " + file); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, TEMPLATE(rest.join(" ") || "the lesson")); console.log("wrote " + file); return; }
   const s = load(file);
   switch (cmd) {

@@ -8,6 +8,7 @@ import { Editor, replayText } from "../shared/wb";
 import { keyStatus } from "../shared/keys";
 import { parseScript, serializeScript } from "../shared/script";
 import { markerDiff } from "../shared/diff";
+import { crossRepeats } from "../shared/across";
 
 let pass = 0, fail = 0;
 const ok = (cond: boolean, label: string, detail = "") => {
@@ -419,6 +420,59 @@ group("an entry may not run past the next marker");
   cg(sc, 200);
   ok(sc.entries.find((e: any) => e.start === 100).end === 200, "closeGapBefore shortens the marker before");
   ok(sc.entries.find((e: any) => e.start === 200).end === 300, "and leaves the new one alone");
+}
+
+group("repetition across lessons");
+{
+  const lesson = (lines: string[]) => ({
+    script: parseScript(`script:
+- type: "editor"
+  start: 100
+  end: 200
+  text: "Roll Intro"
+` + lines.map((t, i) => `- type: "line"
+  actor: "Dev"
+  start: ${(i + 2) * 100}
+  end: ${(i + 3) * 100}
+  text: ${JSON.stringify(t)}
+`).join("")).script,
+  });
+  const demo = "Let's take all of this onto a real server and see what it does.";
+  const a = { name: "06", ...lesson([demo, "The archive has two rows in it today."]) };
+  const b = { name: "07", ...lesson([demo, "A derived table needs a name of its own."]) };
+  const c = { name: "08", ...lesson(["Nothing at all in common with the others here."]) };
+
+  const r = crossRepeats([a, b, c]);
+  ok(r.length === 1, "the shared demo opener is the only thing reported", `got ${r.length}`);
+  ok(r[0].kind === "exact", "an identical sentence is reported as exact");
+  ok(r[0].at.map((x) => x.lesson).join() === "06,07", "and it names both lessons");
+  ok(crossRepeats([a]).length === 0, "one lesson on its own can repeat nothing");
+  // the same sentence twice INSIDE one lesson is checkScript's job, not this one
+  ok(crossRepeats([{ name: "06", ...lesson([demo, demo]) }]).length === 0,
+     "a repeat within a single lesson is not a cross-lesson formula");
+  // a catchphrase is meant to recur
+  const d1 = { name: "06", ...lesson(["Don't just watch it... Do it, and do it today!"]) };
+  const d2 = { name: "07", ...lesson(["Don't just watch it... Do it, and do it today!"]) };
+  ok(crossRepeats([d1, d2]).length === 0, "a catchphrase is exempt");
+}
+
+group("a diff reports field changes, not only text");
+{
+  const one = (mood: string) => `script:
+- type: "editor"
+  start: 100
+  end: 200
+  text: "Roll Intro"
+- type: "line"
+  actor: "Glitch"
+  start: 200
+  end: 300
+  auto: true
+  mood: ${JSON.stringify(mood)}
+  text: "Two rows came back."
+`;
+  const d = markerDiff(parseScript(one("thinking")).script, parseScript(one("neutral")).script);
+  ok(d.changed.join() === "200", "a mood-only change is a change");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

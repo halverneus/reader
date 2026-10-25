@@ -319,8 +319,15 @@ tools.push({
     const d = markerDiff(load(other), load(file));
     const out = d.details.map((x) => {
       if (x.kind !== "~") return `${x.kind} ${x.marker} ${brief(x.entry)}`;
-      const flat = (e: Entry) => ((e as any).text ?? (e as any).keystrokes?.join(" ") ?? JSON.stringify({ ...e, id: 0 })).replace(/\s+/g, " ");
-      return `~ ${x.marker} ${(x.entry as any).actor ?? x.entry.type}\n    was: ${flat(x.was!)}\n    now: ${flat(x.entry)}`;
+      // Report the FIELDS too, not just the text. A script_set replaces a
+      // whole entry, so passing no mood silently drops the one that was
+      // there; rendering only .text showed an identical was/now and hid it.
+      const flat = (e: Entry) => (((e as any).text ?? (e as any).keystrokes?.join(" ") ?? "") as string).replace(/\s+/g, " ");
+      const rest = (e: Entry) => { const { id, start, end, text, keystrokes, ...r } = e as any; return JSON.stringify(r); };
+      const out = [`~ ${x.marker} ${(x.entry as any).actor ?? x.entry.type}`];
+      if (flat(x.was!) !== flat(x.entry)) out.push(`    was: ${flat(x.was!)}`, `    now: ${flat(x.entry)}`);
+      if (rest(x.was!) !== rest(x.entry)) out.push(`    was: ${rest(x.was!)}`, `    now: ${rest(x.entry)}`);
+      return out.join("\n");
     });
     return out.length ? out.join("\n") : "no semantic changes";
   },
