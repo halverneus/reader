@@ -147,8 +147,16 @@ const isVerb = (w: string) => {
 };
 const firstVerbAt = (words: string[]) => { for (let i = 0; i < words.length; i++) if (isVerb(words[i])) return i; return -1; };
 
+/** A question has its own grammar. English moves the auxiliary behind the
+ *  wh-phrase ("how many sales DOES that shop have"), and drops the verb
+ *  outright in a short one ("Why not the invoices?"), both of which are
+ *  ordinary speech. Jeromy's complaint is about noun stacks delivered as
+ *  STATEMENTS, so neither rule below should read a question. */
+const question = (sentence: string) => /\?\s*$/.test(sentence);
+
 /** A whole sentence with no finite verb anywhere, at any length. */
 export function verbless(sentence: string): boolean {
+  if (question(sentence)) return false;
   const core = sentence.replace(/^[\s"']+|[\s.!?"']+$/g, "");
   const words = core.split(/\s+/).filter(Boolean);
   if (words.length <= 3 || IMPER.test(core) || INTERJ.test(core) || FIXED.test(core)) return false;
@@ -162,6 +170,7 @@ export function verbless(sentence: string): boolean {
  * majority of it reads like a fragment."
  */
 export function runup(sentence: string): boolean {
+  if (question(sentence)) return false;
   const core = sentence.replace(/^[\s"']+|[\s.!?"']+$/g, "");
   const words = core.split(/\s+/).filter(Boolean);
   const v = firstVerbAt(words);
@@ -202,7 +211,8 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
   for (const v of hardValidate(s)) err("hard", v.msg, byId.get(v.entryId));
 
   // ── per-entry text rules
-  const openers = new Map<string, number[]>();
+  const openers = new Map<string, { start: number; actor: string; i: number }[]>();
+  let lineNo = 0;
   const agrees: number[] = [];
   for (const e of s.entries) {
     const raw = (e as any).text as string | undefined;
@@ -225,16 +235,29 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
     if (AGREE.test(t)) agrees.push(e.start);
     const key = t.split(/\s+/).slice(0, 3).join(" ").toLowerCase();
     if (!openers.has(key)) openers.set(key, []);
-    openers.get(key)!.push(e.start);
+    openers.get(key)!.push({ start: e.start, actor: (e as any).actor ?? "", i: lineNo++ });
 
     for (const sent of sentences(t)) {
+      // An interrupted line is cut off on purpose: Dev talks over Glitch, or
+      // Glitch picks his own sentence back up after being talked over. The
+      // half that survives is MEANT to read as a fragment, so the ellipsis is
+      // the author saying so. Flagging it taught nothing and cost a read.
+      if (/^\s*\.\.\./.test(sent) || /\.\.\.\s*$/.test(sent)) continue;
       if (verbless(sent)) adv("fragment", "no verb in this sentence", e, sent.slice(0, 64));
       else if (runup(sent)) adv("fragment", "verbless run-up, rescued by the last clause", e, sent.slice(0, 64));
     }
   }
 
-  for (const [k, at] of openers) if (at.length > 1 && k.split(" ").length >= 3)
-    adv("repetition", `repeated opener "${k}" at ${at.join(", ")}`);
+  // Dev says a line and Glitch says it straight back at him. That echo is a
+  // running joke, not an accident, so a repeat on the very next spoken line
+  // by the OTHER actor does not count as repetition.
+  for (const [k, at] of openers) {
+    if (k.split(" ").length < 3) continue;
+    const echo = (a: typeof at[0], b?: typeof at[0]) => !!b && Math.abs(b.i - a.i) === 1 && b.actor !== a.actor;
+    const kept = at.filter((o, n) => !echo(o, at[n - 1]) && !echo(o, at[n + 1]));
+    if (kept.length > 1)
+      adv("repetition", `repeated opener "${k}" at ${kept.map((o) => o.start).join(", ")}`);
+  }
   if (agrees.length > 2)
     adv("conflict", `${agrees.length} flat agreements (budget 2) at ${agrees.join(", ")} — Dev agreeing with everything is the conflict problem`);
 

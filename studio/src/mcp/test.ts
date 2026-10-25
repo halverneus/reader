@@ -45,6 +45,18 @@ for (const t of [
   "One character of difference decides the whole comparison.",
 ]) ok(!(verbless(t) || runup(t)), "pass", t);
 
+group("fragments: questions have their own grammar");
+for (const t of [
+  "Why not the invoices?",
+  "Why those two words?",
+  "For each shop, how many sales does that shop have?",
+  "Four hundred twenty, two hundred, one hundred fifty, and so on?",
+  "How would anybody ever find that?",
+]) ok(!(verbless(t) || runup(t)), "pass", t);
+// but the same noun stack as a statement is still the thing he objects to
+ok(verbless("Four hundred twenty, two hundred, one hundred fifty, and so on."),
+   "flag", "the same list as a statement");
+
 // ── coursework, two tiers ────────────────────────────────────────────────────
 group("coursework: hard tier must fire");
 for (const t of [
@@ -323,6 +335,44 @@ group("marker diff");
   const d3 = markerDiff(a, dropped);
   ok(d3.removed.join() === "300" && !d3.changed.length, "a removed entry reports its marker", JSON.stringify(d3));
   ok(markerDiff(dropped, a).added.join() === "300", "and the reverse reports it as added");
+}
+
+// ── devices the author meant: interruptions and the echo joke ──────────────
+group("deliberate devices are not defects");
+{
+  const head = `script:
+- type: "editor"
+  start: 100
+  end: 200
+  text: "Roll Intro"
+`;
+  const line = (start: number, actor: string, text: string) => `- type: "line"
+  actor: ${JSON.stringify(actor)}
+  start: ${start}
+  end: ${start + 100}${actor === "Glitch" ? "\n  auto: true" : ""}
+  text: ${JSON.stringify(text)}
+`;
+  const rule = (text: string, r: string) => checkText(text).filter((x) => x.rule === r);
+
+  // an interrupted line is cut off on purpose; the ellipsis says so
+  ok(rule(head + line(200, "Glitch", "And for the second one the clerk..."), "fragment").length === 0,
+     "a line cut off mid-sentence is not a fragment");
+  ok(rule(head + line(200, "Glitch", "...and about fifty examples of nothing in particular."), "fragment").length === 0,
+     "a line resuming after an interruption is not a fragment");
+  ok(rule(head + line(200, "Glitch", "Three coffee shops, four baristas, and a table of sales."), "fragment").length === 1,
+     "an ordinary fragment is still caught");
+
+  // Dev says it, Glitch says it straight back: that is the joke
+  ok(rule(head + line(200, "Dev", "There are three rows on this slide.") +
+          line(300, "Glitch", "There are three rows on that slide."), "repetition").length === 0,
+     "the next line echoing the previous speaker is the running joke");
+  ok(rule(head + line(200, "Dev", "There are three rows on this slide.") +
+          line(300, "Glitch", "The optimizer has made a choice.") +
+          line(400, "Dev", "There are three rows on that slide."), "repetition").length === 1,
+     "the same opener two lines apart is still repetition");
+  ok(rule(head + line(200, "Dev", "There are three rows on this slide.") +
+          line(300, "Dev", "There are three rows on that slide."), "repetition").length === 1,
+     "one speaker repeating himself back to back is not the joke");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
