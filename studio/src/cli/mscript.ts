@@ -2,7 +2,7 @@
 // Every command reads the file, applies one change, writes it back (a .bak is kept). Markers are the YAML `start` numbers.
 import fs from "node:fs";
 import path from "node:path";
-import { parseScript, serializeScript, markers, entriesAt, markerBetween, newId, validate, cleanText, outroPhases, Entry, Script } from "../shared/script";
+import { parseScript, serializeScript, markers, entriesAt, markerBetween, newId, validate, cleanText, outroPhases, wrap70, closeGapBefore, Entry, Script } from "../shared/script";
 import { checkScript, errorsOf, type Finding } from "../shared/check";
 import { readDeck } from "../shared/deck";
 import { MOOD_NAMES, MOODS } from "../../glitch/moods";
@@ -103,7 +103,7 @@ function main(argv: string[]) {
       const end = d.end ?? existing[0]?.end ?? (markers(s).find((m) => m > marker) ?? marker + 100);
       const base = { id: newId(), start: marker, end, auto: d.auto || undefined };
       let e: Entry;
-      if (kind === "line") e = { ...base, type: "line", actor: d.actor === "Glitch" ? "Glitch" : "Dev", text: String(d.text ?? "").trim(), mood: d.mood || undefined };
+      if (kind === "line") e = { ...base, type: "line", actor: d.actor === "Glitch" ? "Glitch" : "Dev", text: wrap70(String(d.text ?? "").trim()), mood: d.mood || undefined };
       else if (kind === "editor") e = { ...base, type: "editor", text: String(d.text ?? "").trim() };
       else if (kind === "keys") e = { ...base, type: "keys", keystrokes: d.keystrokes ?? [], speed: d.speed };
       else if (kind === "face") e = { ...base, type: "face", mood: d.mood ?? "neutral", hold: d.hold, delay: d.delay };
@@ -112,6 +112,7 @@ function main(argv: string[]) {
       else throw new Error("unknown kind " + kind);
       const i = s.entries.findIndex((x) => x.start === marker && x.type === kind && (kind !== "line" || (x as any).actor === (e as any).actor));
       if (i >= 0) s.entries[i] = e; else s.entries.push(e);
+      if (!existing.length) closeGapBefore(s, marker);
       s.entries.sort((a, b) => a.start - b.start); save(file, s); console.log(`ok ${marker} ${brief(e)}`); break;
     }
     case "rm": { const marker = +rest[0], kind = rest[1] ?? "all"; const n = s.entries.length; s.entries = s.entries.filter((e) => !(e.start === marker && (kind === "all" || e.type === kind))); save(file, s); console.log(`removed ${n - s.entries.length}`); break; }

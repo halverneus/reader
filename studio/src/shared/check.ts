@@ -261,6 +261,19 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
   if (agrees.length > 2)
     adv("conflict", `${agrees.length} flat agreements (budget 2) at ${agrees.join(", ")} — Dev agreeing with everything is the conflict problem`);
 
+  // ── an entry that runs past the next marker
+  // Inserting a marker between two existing ones leaves the earlier marker
+  // still claiming the span the new one now occupies. Nothing on screen says
+  // so, and the two simply overlap in time.
+  {
+    const ms = markers(s);
+    for (const e of s.entries) {
+      const over = ms.find((m) => m > e.start && m < e.end);
+      if (over !== undefined)
+        err("span", `this entry runs from ${e.start} to ${e.end}, past marker ${over}; it should end at ${over}`, e);
+    }
+  }
+
   // ── marker discipline
   for (const m of markers(s)) {
     const at = entriesAt(s, m);

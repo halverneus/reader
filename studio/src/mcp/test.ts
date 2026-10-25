@@ -375,5 +375,51 @@ group("deliberate devices are not defects");
      "one speaker repeating himself back to back is not the joke");
 }
 
+group("an entry may not run past the next marker");
+{
+  const overlap = `script:
+- type: "editor"
+  start: 100
+  end: 200
+  text: "Roll Intro"
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 400
+  text: "The outer query asks for a count."
+- type: "line"
+  actor: "Glitch"
+  start: 300
+  end: 400
+  auto: true
+  text: "And the inner one answers it."
+`;
+  ok(errorsOf(checkText(overlap)).filter((x) => x.rule === "span").length === 1,
+     "a Dev line spanning a newly inserted Glitch marker is caught");
+  ok(errorsOf(checkText(overlap.replace("  end: 400\n  text: \"The outer", "  end: 300\n  text: \"The outer"))).filter((x) => x.rule === "span").length === 0,
+     "ending at the new marker is correct");
+}
+
+{
+  // closeGapBefore is what keeps the above from ever being written
+  const { parseScript: ps, closeGapBefore: cg } = require("../shared/script");
+  const sc = ps(`script:
+- type: "line"
+  actor: "Dev"
+  start: 100
+  end: 300
+  text: "One."
+- type: "line"
+  actor: "Glitch"
+  start: 200
+  end: 300
+  auto: true
+  text: "Two."
+`).script;
+  cg(sc, 200);
+  ok(sc.entries.find((e: any) => e.start === 100).end === 200, "closeGapBefore shortens the marker before");
+  ok(sc.entries.find((e: any) => e.start === 200).end === 300, "and leaves the new one alone");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

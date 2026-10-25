@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import {
-  parseScript, serializeScript, markers, entriesAt, markerBetween, newId,
+  parseScript, serializeScript, markers, entriesAt, markerBetween, newId, wrap70, closeGapBefore,
   cleanText, outroPhases, type Entry, type Script,
 } from "../shared/script";
 import { checkScript, errorsOf, type Finding } from "../shared/check";
@@ -113,16 +113,6 @@ async function commit(file: string, src: Source, s: Script): Promise<string> {
   throw new Error(`could not apply to Studio's buffer: ${r?.reason ?? "the window did not answer"}. Nothing was written.`);
 }
 
-const wrap70 = (t: string) => {
-  const out: string[] = [];
-  let cur = "";
-  for (const w of t.replace(/\s+/g, " ").trim().split(" ")) {
-    if (cur && (cur + " " + w).length > 70) { out.push(cur); cur = w; }
-    else cur = cur ? cur + " " + w : w;
-  }
-  if (cur) out.push(cur);
-  return out.join("\n");
-};
 
 const brief = (e: Entry): string =>
   e.type === "line" ? `${(e as any).actor}${(e as any).mood ? `[${(e as any).mood}]` : ""}: ${cleanText((e as any).text).replace(/\n/g, " ").slice(0, 70)}`
@@ -293,6 +283,7 @@ tools.push({
     else throw new Error("unknown kind " + kind);
     const i = s.entries.findIndex((x) => x.start === m && x.type === kind && (kind !== "line" || (x as any).actor === (e as any).actor));
     if (i >= 0) s.entries[i] = e; else s.entries.push(e);
+    if (!existing.length) closeGapBefore(s, m);
     s.entries.sort((a, b) => a.start - b.start);
     return `ok ${m} ${brief(e)}` + (await commit(file, src, s));
   },

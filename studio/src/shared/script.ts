@@ -111,6 +111,17 @@ export function markerBetween(s: Script, after: number): number {
   return mid > after ? mid : after + 1;
 }
 
+/** Putting an entry on a BRAND NEW marker leaves the marker before it still
+ *  claiming the span the new one now occupies, so the two overlap in time.
+ *  Found by dropping a Glitch line into the middle of a long Dev stretch:
+ *  the Dev line and the new Glitch line both ran 3300 -> 3400. */
+export function closeGapBefore(s: Script, marker: number): void {
+  const prev = [...new Set(s.entries.map((e) => e.start))]
+    .filter((m) => m < marker).sort((a, b) => b - a)[0];
+  if (prev === undefined) return;
+  for (const e of s.entries) if (e.start === prev && e.end > marker) e.end = marker;
+}
+
 /** Renumber all markers to 100-step spacing (destructive but tidy). */
 export function renumber(s: Script): Script {
   const ms = markers(s); const map = new Map(ms.map((m, i) => [m, (i + 1) * 100]));
@@ -261,7 +272,8 @@ export function validate(s: Script): { entryId: string; msg: string }[] {
 // ── outro ────────────────────────────────────────────────────────────────────
 export const OUTRO_PHASES: OutroPhaseName[] = ["thanks", "credits", "next", "subscribe"];
 export interface ResolvedPhase { phase: OutroPhaseName; title: string; subtitle: string; names: string[]; text: string; mood: string; minMs: number }
-const wrap70 = (t: string) => { const out: string[] = []; let cur = ""; for (const w of t.split(/\s+/)) { if ((cur + " " + w).trim().length > 70) { out.push(cur.trim()); cur = w; } else cur += " " + w; } if (cur.trim()) out.push(cur.trim()); return out.join("\n"); };
+/** Lines are read off a teleprompter, so they are kept to 70 columns. */
+export const wrap70 = (t: string) => { const out: string[] = []; let cur = ""; for (const w of t.split(/\s+/)) { if ((cur + " " + w).trim().length > 70) { out.push(cur.trim()); cur = w; } else cur += " " + w; } if (cur.trim()) out.push(cur.trim()); return out.join("\n"); };
 const joinNames = (n: string[]) => n.length <= 1 ? n.join("") : n.length === 2 ? `${n[0]} and ${n[1]}` : `${n.slice(0, -1).join(", ")}, and ${n[n.length - 1]}`;
 /** Fill in defaults so the production engine, the renderer and the editor all see the same phases. */
 export function outroPhases(e: OutroEntry): ResolvedPhase[] {
