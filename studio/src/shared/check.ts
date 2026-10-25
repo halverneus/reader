@@ -193,6 +193,11 @@ const sentences = (t: string) => t.split(/(?<=[.!?])(?<!\b\d\.)\s+/).map((s) => 
 // ── the checker ──────────────────────────────────────────────────────────────
 export interface CheckOptions { deck?: { slides: number; holds: number } }
 
+/** Moods that are over as fast as they arrive, so a `hold` on one is right:
+ *  the mask slips and is straightened again. Every other mood is an
+ *  expression Glitch wears while he listens, and reverting it is a twitch. */
+export const FLASH_MOODS = new Set(["surprise", "laugh", "glitch", "malice", "caught", "anger", "hurt"]);
+
 /** Capitalised words a Glitch line may keep. ID is deliberate and has a
  *  pronunciation of its own; the rest are acronyms read as words anyway. */
 // NULL is deliberately absent: the house style is "null" lowercase in a
@@ -301,6 +306,20 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
     const caps = [...new Set((text.match(/\b[A-Z]{2,}\b/g) ?? []).filter((w) => !CAPS_OK.has(w)))];
     if (caps.length)
       err("caps", `Glitch says ${caps.map((c) => `"${c}"`).join(", ")} in capitals; the voice spells those out. Write them quoted and lowercase, as ${caps.map((c) => `"${c.toLowerCase()}"`).join(", ")}`, e);
+  }
+
+  // ── a face that un-plays itself
+  // `hold` reverts to the face showing when the cue fired. That is right for a
+  // flinch and wrong for everything else: the reaction plays, then snaps back
+  // to a face that may be several beats stale, and the next line usually does
+  // not reassert anything. Measured across the Week 05-06 recordings, 94% of
+  // those reverted faces sat on screen over 3 seconds. Jeromy watching the cut
+  // read it as Glitch's mood toggling at random (2026-10-25).
+  for (const e of s.entries) {
+    if (e.type !== "face") continue;
+    const m = (e as any).mood as string;
+    if (!(e as any).hold || FLASH_MOODS.has(m)) continue;
+    adv("face-hold", `face ${m} at ${e.start} holds for ${(e as any).hold}ms and then reverts. ${m} is a settled expression, not a flinch: drop the hold and let it stand until the next cue`, e);
   }
 
   // ── Roll Intro. Seven of eight Week 06 scripts shipped without one because

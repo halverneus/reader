@@ -174,7 +174,7 @@ function Cell({ e }: { e: Entry }) {
           <div class="meta">
             {e.actor === "Glitch" && <SayButton text={e.text} actor="Glitch" />}
             <select value={e.actor} onChange={(ev: any) => patch({ actor: ev.currentTarget.value } as any)}><option>Dev</option><option>Glitch</option></select>
-            <select value={e.mood ?? ""} onChange={(ev: any) => patch({ mood: ev.currentTarget.value || undefined } as any)}><option value="">mood: (keep)</option>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
+            <select value={e.mood ?? ""} onChange={(ev: any) => patch({ mood: ev.currentTarget.value || undefined } as any)}><option value="">mood: (carry the last one)</option>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
             {e.text.split("\n").some((l) => l.length > 70) && <span class="mono" style="color:var(--rose);font-size:11px">line &gt; 70 chars</span>}
           </div></>}
         {e.type === "editor" && <textarea value={e.text} rows={Math.max(1, e.text.split("\n").length)} onInput={(ev: any) => patch({ text: ev.currentTarget.value } as any)} placeholder="Notes for the editor (never spoken)" />}
@@ -184,7 +184,7 @@ function Cell({ e }: { e: Entry }) {
         {e.type === "face" && <div class="meta">
           <select value={e.mood} onChange={(ev: any) => patch({ mood: ev.currentTarget.value } as any)}>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
           <span class="muted" style="font-size:11px" title="wait this long after the marker before the face changes">delay ms</span><input type="number" min={0} step={100} style="width:80px" value={e.delay ?? 0} onChange={(ev: any) => patch({ delay: +ev.currentTarget.value || undefined } as any)} />
-          <span class="muted" style="font-size:11px" title="hold the face this long, then go back to the previous one">hold ms</span><input type="number" min={0} step={100} style="width:80px" value={e.hold ?? 0} onChange={(ev: any) => patch({ hold: +ev.currentTarget.value || undefined } as any)} /></div>}
+          <span class="muted" style="font-size:11px" title="Snap back to the previous face after this long. Leave it at 0 and the face stays until something else changes it — which is what you want for anything but a flinch.">revert after ms</span><input type="number" min={0} step={100} style="width:80px" value={e.hold ?? 0} onChange={(ev: any) => patch({ hold: +ev.currentTarget.value || undefined } as any)} /><span class="muted" style="font-size:11px">{e.hold ? `then back to the previous face` : `stays until the next cue`}</span></div>}
         {e.type === "outro" && <OutroCell e={e} patch={patch} />}
         {e.type === "slide" && <div class="meta">
           <select value={e.actor} onChange={(ev: any) => patch({ actor: ev.currentTarget.value } as any)}><option>Dev</option><option>Glitch</option></select>

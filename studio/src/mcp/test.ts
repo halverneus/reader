@@ -475,5 +475,33 @@ group("a diff reports field changes, not only text");
   ok(d.changed.join() === "200", "a mood-only change is a change");
 }
 
+group("a face either flinches or it settles");
+{
+  const face = (mood: string, hold: number | null) => `script:
+- type: "editor"
+  start: 100
+  end: 200
+  text: "Roll Intro"
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "The inner query runs first and hands its answer up."
+- type: "face"
+  start: 200
+  end: 300
+  mood: "${mood}"
+  delay: 2000
+${hold === null ? "" : `  hold: ${hold}\n`}`;
+  const held = (mood: string, hold: number | null) => checkText(face(mood, hold)).filter((x) => x.rule === "face-hold");
+
+  ok(held("curious", 2500).length === 1, "a hold on a settled face is flagged");
+  ok(held("thinking", 2500).length === 1, "thinking is a listening expression, not a flinch");
+  ok(held("curious", null).length === 0, "no hold, nothing to say");
+  ok(held("malice", 900).length === 0, "the mask slipping is meant to snap back");
+  ok(held("surprise", 900).length === 0, "a jolt is meant to snap back");
+  ok(held("curious", 2500)[0].severity === "advice", "it is advice: a deliberate hold is still allowed");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
