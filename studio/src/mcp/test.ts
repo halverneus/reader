@@ -9,6 +9,7 @@ import { keyStatus } from "../shared/keys";
 import { parseScript, serializeScript } from "../shared/script";
 import { markerDiff } from "../shared/diff";
 import { crossRepeats } from "../shared/across";
+import { COLD_OPEN_FIRST_WORD, COLD_OPEN_AT, FPS, firstSpeechStart, lastSpeechEnd, openerTrim, voiceSpans, type Span } from "../shared/timeline";
 
 let pass = 0, fail = 0;
 const ok = (cond: boolean, label: string, detail = "") => {
@@ -501,6 +502,48 @@ ${hold === null ? "" : `  hold: ${hold}\n`}`;
   ok(held("malice", 900).length === 0, "the mask slipping is meant to snap back");
   ok(held("surprise", 900).length === 0, "a jolt is meant to snap back");
   ok(held("curious", 2500)[0].severity === "advice", "it is advice: a deliberate hold is still allowed");
+}
+
+group("the cold open belongs to whoever speaks first");
+{
+  // Every script through Week 05 opened on Dev, so "the first word" and "Dev's
+  // first word" were the same thing. W06L06 opens on Glitch, talking over the
+  // top of the lesson while Dev is still silent.
+  const landsAt = (word: number) => {
+    const t = openerTrim(word, FPS)!;
+    // where the first word ends up on the timeline, in seconds
+    return (Math.round(FPS * COLD_OPEN_AT) + t.pad + Math.round(FPS * (word - t.src0))) / FPS;
+  };
+  const near = (a: number, b: number) => Math.abs(a - b) < 1 / FPS;
+
+  ok(openerTrim(undefined, FPS) === null, "a silent opener is left where it is");
+  ok(near(landsAt(4.3), COLD_OPEN_FIRST_WORD), "Dev takes a breath first: the wait before him is trimmed off");
+  ok(near(landsAt(2.9), COLD_OPEN_FIRST_WORD), "Glitch starts a quarter second after the marker and lands in the same place");
+  ok(openerTrim(4.3, FPS)!.pad === 0, "a recording with lead-in to spare needs no padding");
+
+  // a TTS opener can speak almost immediately, where a human cannot. If the
+  // source cannot give the lead-in, the opener moves instead of the word.
+  const tight = openerTrim(0.4, FPS)!;
+  ok(tight.src0 === 0, "there is nothing before the start of the file to trim");
+  ok(tight.pad > 0, "the lead-in the recording is short of becomes padding");
+  ok(near(landsAt(0.4), COLD_OPEN_FIRST_WORD), "so the first word still clears the thumbnail");
+
+  // mic spans and TTS spans go into one pool and are then indistinguishable
+  const mic: Span[] = [[9.0, 10.5]];
+  const glitch: Span[] = voiceSpans(3.0, 4200);
+  ok(glitch.length === 1 && glitch[0][0] === 3.0, "a gapless line is one span from the moment it was heard");
+  ok(firstSpeechStart([...mic, ...glitch], 2.5, 20) === 3.0, "Glitch speaking first makes Glitch the first word");
+  ok(firstSpeechStart([...glitch, ...mic], 2.5, 20) === 3.0, "and the pooling order does not decide it");
+  ok(lastSpeechEnd([...mic, ...glitch], 2.5, 20) === 10.5, "the last word is Dev's, because he finishes later");
+
+  // a line that opens or closes on a [pause] must not drag the boundaries
+  const lead = voiceSpans(3.0, 4200, [[0, 800]]);
+  ok(lead.length === 1 && lead[0][0] === 3.8, "a leading pause is silence, not the first word");
+  const trail = voiceSpans(3.0, 4200, [[3400, 4200]]);
+  ok(trail.length === 1 && trail[0][1] === 6.4, "a trailing pause is silence, not the last word");
+  const mid = voiceSpans(3.0, 4200, [[1000, 1500]]);
+  ok(mid.length === 2 && mid[0][1] === 4.0 && mid[1][0] === 4.5, "a pause in the middle splits the line in two");
+  ok(firstSpeechStart(voiceSpans(3.0, 4200, [[0, 800]]), 0, 20) === 3.8, "and the opener trims to the word, not to the clip");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { loadConfig, type Config } from "../config";
 import { parseScript, cleanText, entriesAt } from "../../shared/script";
+import { COLD_OPEN_AT, firstSpeechStart, lastSpeechEnd, openerTrim, voiceSpans, type Span } from "../../shared/timeline";
 import { ffprobeJson, rmsEnvelope, percentileDb } from "./exec";
 import { findCam, findDesktop } from "./matte";
 import { outroSpan } from "./outro-render";
@@ -20,7 +21,6 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 // playing through both transitions, so the cut is hidden. Seconds are relative to the intro clip's start.
 const INTRO = { prevSpeechEndsAt: 0.5, prevPlaysUntil: 2.0, nextVideoBy: 10.0, nextSpeechAt: 12.0, clearAt: 11.25 };
 const AFTER_INTRO = 5.0;           // watermark + music start this long after the intro has cleared
-const COLD_OPEN_FIRST_WORD = 2.067; // the thumbnail finishes fading at 1.567 s; the first word follows 0.5 s later
 // watermark.webm (80 s): start-up, a stretch that loops back-to-back, trail-off ending in a 0.5 s fade.
 // Cut points copied from the hand-edited episodes (S09E03, S11E03, S11E04), in frames.
 const WM = { startIn: 0, startLen: 325, loopIn: 325, loopLen: 4046, trailIn: 4371, trailLen: 429, fade: 30 };
@@ -56,7 +56,6 @@ export function resolveSegments(session: any): Segment[] {
 }
 
 // ── speech detection ─────────────────────────────────────────────────────────
-type Span = [number, number];
 /** Spoken spans in the mic file, shifted onto the desktop clock. A 100 ms window is speech when its RMS is well above
  *  the recording's own noise floor (breaths and chair creaks sit in between, so a fixed dB threshold misfires). */
 async function micSpeech(file: string, micOffset: number): Promise<Span[]> {
@@ -71,8 +70,6 @@ async function micSpeech(file: string, micOffset: number): Promise<Span[]> {
   }
   return speech.filter(([a, b]) => b - a >= 0.15).map(([a, b]) => [a - micOffset, b - micOffset]);
 }
-const lastSpeechEnd = (spans: Span[], from: number, to: number) => { const e = spans.filter(([a, b]) => a < to && b > from).map(([, b]) => Math.min(b, to)); return e.length ? Math.max(...e) : undefined; };
-const firstSpeechStart = (spans: Span[], from: number, to: number) => { const s = spans.filter(([a, b]) => b > from && a < to).map(([a]) => Math.max(a, from)); return s.length ? Math.min(...s) : undefined; };
 
 // ── project model ────────────────────────────────────────────────────────────
 interface Clip { id: number; kind: "av" | "video" | "audio" | "image"; file: string; name: string; frames: number; hasAudio: boolean; hasVideo: boolean }
@@ -275,6 +272,13 @@ export function pickThumbnail(session: any, cfg: Config): string | undefined {
   return all.find((f) => course && f.toLowerCase().startsWith(course.toLowerCase() + " ")) ?? all.find((f) => key && f.toLowerCase().includes(key)) ?? all[0];
 }
 
+/** Who speaks the cold open. This only feeds the log line, but after a render
+ *  that log is the one place the answer is written down. */
+const firstVoice = (script: any, marker: number): string => {
+  const l = entriesAt(script, marker).find((e: any) => e.type === "line") as any;
+  return l?.actor ?? "the recording";
+};
+
 // ── build ────────────────────────────────────────────────────────────────────
 interface Piece { seg: Segment; src0: number; src1: number; speed?: number; at: number } // src in desktop seconds, at in frames
 
@@ -326,14 +330,10 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
   const voice = evs.filter((e: any) => e.kind === "line-start" && e.spoken && e.audio && fs.existsSync(e.audio));
   const freezes = evs.filter((e: any) => e.kind === "freeze");
 
-  // who is talking when: the mic, plus Glitch's TTS lines
-  // (a Glitch line's [pause] gaps are silence: a leading or trailing pause mustn't move the first/last-word boundaries)
-  const voiceSpans = (v: any): Span[] => {
-    const out: Span[] = []; let at = 0;
-    for (const [a, b] of [...(v.gaps ?? []), [v.duration ?? 0, v.duration ?? 0]] as [number, number][]) { if (a > at) out.push([rel(v.t) + at / 1000, rel(v.t) + a / 1000]); at = Math.max(at, b); }
-    return out;
-  };
-  const speech: Span[] = [...(micRaw ? await micSpeech(micRaw, micOffset) : []), ...voice.flatMap(voiceSpans)];
+  // who is talking when: the mic (Dev) plus the logged TTS clips (Glitch). The
+  // two are pooled on purpose, so every "first word" and "last word" below is
+  // whoever actually spoke it rather than whoever usually does.
+  const speech: Span[] = [...(micRaw ? await micSpeech(micRaw, micOffset) : []), ...voice.flatMap((v: any) => voiceSpans(rel(v.t), v.duration ?? 0, v.gaps ?? []))];
   log(`[project] ${speech.length} speech spans\n`);
 
   // split segments at the intro marker so the intro can be inserted between takes
@@ -368,16 +368,20 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
 
   // no dead air at the top: trim the wait before the first word so it lands just after the thumbnail fades
   const opener = pieces[0];
+  let openerPad = 0;
   if (opener && !opener.speed && !(cIntro && introMarker >= 0 && opener.seg.marker >= introMarker)) {
     const word = firstSpeechStart(speech, opener.seg.t0, opener.seg.t1);
-    if (word != null) {
-      opener.src0 = Math.max(0, word - (COLD_OPEN_FIRST_WORD - 1.0));
-      log(`[project] first word at ${word.toFixed(2)} s src → starts the video at ${opener.src0.toFixed(2)} s\n`);
+    const trim = openerTrim(word, FPS);
+    if (trim && word != null) {
+      opener.src0 = trim.src0;
+      openerPad = trim.pad;
+      const who = firstVoice(script, opener.seg.marker);
+      log(`[project] ${who} opens: first word at ${word.toFixed(2)} s src → starts the video at ${opener.src0.toFixed(2)} s${openerPad ? `, held back ${(openerPad / FPS).toFixed(2)} s because the recording is short of lead-in` : ""}\n`);
     }
   }
 
   // ── layout: sequential takes, with the intro and outro laid over the cuts ──
-  let cursor = fr(1.0), introAt = -1;
+  let cursor = fr(COLD_OPEN_AT) + openerPad, introAt = -1;
   for (let i = 0; i < pieces.length; i++) {
     const p = pieces[i];
     if (introAt < 0 && cIntro && introMarker >= 0 && p.seg.marker >= introMarker) {
@@ -464,7 +468,7 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
   const total = P.end();
 
   // watermark + music: from 5 s after the intro clears; the watermark stops before the outro, the music runs to the end
-  const lessonStart = introAt >= 0 ? introAt + fr(INTRO.clearAt + AFTER_INTRO) : fr(1);
+  const lessonStart = introAt >= 0 ? introAt + fr(INTRO.clearAt + AFTER_INTRO) : fr(COLD_OPEN_AT) + openerPad;
   const waterEnd = outroAt >= 0 ? outroAt : total - fr(1);
   if (cWater && cWater.frames >= WM.trailIn + WM.trailLen) planWatermark(P, cWater, lessonStart, waterEnd, seeded(session.meta.name ?? dir));
   if (cMusic && cMusic.frames > 0) {
