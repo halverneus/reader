@@ -549,7 +549,7 @@ group("the cold open belongs to whoever speaks first");
 
 group("the new expressions, and spending them");
 {
-  for (const m of ["skeptical", "dawning", "unimpressed", "eyeroll"])
+  for (const m of ["skeptical", "dawning", "unimpressed", "eyeroll", "cringe"])
     ok(MOOD_NAMES.includes(m), `${m} is in the library`);
 
   // each new face has to be distinguishable from the one it was carved out of,
@@ -562,6 +562,9 @@ group("the new expressions, and spending them");
   ok((e("unimpressed").lookX ?? 0) === 0 && e("bored").lookX > .5, "unimpressed is still looking at you; bored has looked away");
   ok((e("unimpressed").browA ?? 0) === 0 && e("annoyed").browA > 0, "and it carries none of annoyed's irritation");
   ok(e("eyeroll").lookY <= -1, "the eyes actually go up");
+  ok(e("cringe").mouthW > 1.2 && e("cringe").mouthCurve < 0, "cringe is a grimace, wide and down");
+  ok(e("cringe").asym > .5 && e("cringe").tilt < 0, "half the face shuts and the head pulls away");
+  ok(e("cringe").lift > 0 && e("hurt").lift < 0, "cringe braces; hurt droops. One watches, the other was hit");
 
   const face = (mood: string, hold: number | null) => `script:
 - type: "editor"
@@ -582,6 +585,8 @@ ${hold === null ? "" : `  hold: ${hold}\n`}`;
   const held = (m: string, h: number | null) => checkText(face(m, h)).filter((x) => x.rule === "face-hold");
   ok(held("eyeroll", 900).length === 0, "an eye roll is meant to snap back");
   ok(held("eyeroll", null).length === 1, "and held, it is a stare at the ceiling");
+  ok(held("cringe", 900).length === 0, "a wince is meant to snap back too");
+  ok(held("cringe", null).length === 1, "and held, it is a face stuck that way");
   ok(held("skeptical", 2500).length === 1, "skeptical settles, so a hold on it is still a twitch");
   ok(held("unimpressed", null).length === 0, "a deadpan with no hold is exactly right");
 

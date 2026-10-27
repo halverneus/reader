@@ -196,12 +196,12 @@ export interface CheckOptions { deck?: { slides: number; holds: number } }
 /** Moods that are over as fast as they arrive, so a `hold` on one is right:
  *  the mask slips and is straightened again. Every other mood is an
  *  expression Glitch wears while he listens, and reverting it is a twitch. */
-export const FLASH_MOODS = new Set(["surprise", "laugh", "glitch", "malice", "caught", "anger", "hurt", "eyeroll"]);
+export const FLASH_MOODS = new Set(["surprise", "laugh", "glitch", "malice", "caught", "anger", "hurt", "eyeroll", "cringe"]);
 
-/** And the one nobody can wear: the eyes are rolled all the way up. Held, it
- *  stops being a comment on what Dev just said and becomes a stare at the
- *  ceiling (2026-10-27). */
-const MUST_FLASH = new Set(["eyeroll"]);
+/** And the ones nobody can wear. The eyes are rolled all the way up, or the
+ *  face is screwed shut: held, they stop being a comment on what Dev just did
+ *  and become a stare at the ceiling or a permanent wince (2026-10-27). */
+const MUST_FLASH = new Set(["eyeroll", "cringe"]);
 
 /** Capitalised words a Glitch line may keep. ID is deliberate and has a
  *  pronunciation of its own; the rest are acronyms read as words anyway. */
