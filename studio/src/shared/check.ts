@@ -13,7 +13,7 @@
 //            reference a public viewer cannot resolve).
 //   advice - a judgment call for a human. Printed, never fatal, never acted on
 //            automatically.
-import { parseScript, validate as hardValidate, cleanText, markers, entriesAt, type Script, type Entry } from "./script";
+import { parseScript, validate as hardValidate, cleanText, splitMoodTags, markers, entriesAt, type Script, type Entry } from "./script";
 import { auditKeystrokes } from "./keys";
 
 export type Severity = "error" | "advice";
@@ -196,7 +196,12 @@ export interface CheckOptions { deck?: { slides: number; holds: number } }
 /** Moods that are over as fast as they arrive, so a `hold` on one is right:
  *  the mask slips and is straightened again. Every other mood is an
  *  expression Glitch wears while he listens, and reverting it is a twitch. */
-export const FLASH_MOODS = new Set(["surprise", "laugh", "glitch", "malice", "caught", "anger", "hurt"]);
+export const FLASH_MOODS = new Set(["surprise", "laugh", "glitch", "malice", "caught", "anger", "hurt", "eyeroll"]);
+
+/** And the one nobody can wear: the eyes are rolled all the way up. Held, it
+ *  stops being a comment on what Dev just said and becomes a stare at the
+ *  ceiling (2026-10-27). */
+const MUST_FLASH = new Set(["eyeroll"]);
 
 /** Capitalised words a Glitch line may keep. ID is deliberate and has a
  *  pronunciation of its own; the rest are acronyms read as words anyway. */
@@ -320,6 +325,29 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
     const m = (e as any).mood as string;
     if (!(e as any).hold || FLASH_MOODS.has(m)) continue;
     adv("face-hold", `face ${m} at ${e.start} holds for ${(e as any).hold}ms and then reverts. ${m} is a settled expression, not a flinch: drop the hold and let it stand until the next cue`, e);
+  }
+
+  // ── a flinch nobody blinks out of
+  for (const e of s.entries) {
+    if (e.type !== "face" || !MUST_FLASH.has((e as any).mood)) continue;
+    if (!(e as any).hold) adv("face-hold", `face ${(e as any).mood} at ${e.start} has no hold, so Glitch wears it until the next cue. Give it one (about 900ms) and let it snap back`, e);
+  }
+
+  // ── one face doing all the work
+  // curious and thinking between them carry 47% of every mood cue in CS235,
+  // which is what made Glitch read as ping-ponging between two expressions.
+  // The library has 27 moods; a script leaning a third of its cues on one of
+  // them is not using them (2026-10-27).
+  {
+    const tally = new Map<string, number>();
+    const bump = (m?: string) => { if (m) tally.set(m, (tally.get(m) ?? 0) + 1); };
+    for (const e of s.entries) {
+      if (e.type === "face") bump((e as any).mood);
+      else if (e.type === "line") { bump((e as any).mood); for (const c of splitMoodTags((e as any).text).cues) bump(c.mood); }
+    }
+    const total = [...tally.values()].reduce((n, v) => n + v, 0);
+    if (total >= 20) for (const [m, n] of [...tally].sort((a, b) => b[1] - a[1]).slice(0, 2))
+      if (n / total > 0.3) adv("mood-spread", `${m} is ${Math.round((n / total) * 100)}% of the ${total} mood cues here. Spend a few of them somewhere else, or Glitch reads as toggling rather than reacting`);
   }
 
   // ── Roll Intro. Seven of eight Week 06 scripts shipped without one because

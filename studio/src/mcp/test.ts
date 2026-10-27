@@ -9,6 +9,7 @@ import { keyStatus } from "../shared/keys";
 import { parseScript, serializeScript } from "../shared/script";
 import { markerDiff } from "../shared/diff";
 import { crossRepeats } from "../shared/across";
+import { MOODS, MOOD_NAMES } from "../../glitch/moods";
 import { COLD_OPEN_FIRST_WORD, COLD_OPEN_AT, FPS, firstSpeechStart, lastSpeechEnd, openerTrim, voiceSpans, type Span } from "../shared/timeline";
 
 let pass = 0, fail = 0;
@@ -544,6 +545,63 @@ group("the cold open belongs to whoever speaks first");
   const mid = voiceSpans(3.0, 4200, [[1000, 1500]]);
   ok(mid.length === 2 && mid[0][1] === 4.0 && mid[1][0] === 4.5, "a pause in the middle splits the line in two");
   ok(firstSpeechStart(voiceSpans(3.0, 4200, [[0, 800]]), 0, 20) === 3.8, "and the opener trims to the word, not to the clip");
+}
+
+group("the new expressions, and spending them");
+{
+  for (const m of ["skeptical", "dawning", "unimpressed", "eyeroll"])
+    ok(MOOD_NAMES.includes(m), `${m} is in the library`);
+
+  // each new face has to be distinguishable from the one it was carved out of,
+  // or it is another name for a face Glitch already has
+  const e = (m: string) => MOODS[m].expr as any;
+  ok(e("skeptical").asym > .9 && (e("skeptical").mouthCurve ?? 0) < 0, "skeptical is one brow up over a flat mouth, not smug's smirk");
+  ok((e("skeptical").smirk ?? 0) < (e("smug").smirk ?? 0), "and it is not just smug by another name");
+  ok(e("dawning").pupil > 1 && e("surprise").pupil < 1, "dawning dilates where surprise contracts: it lands, it does not jolt");
+  ok(e("dawning").reach > e("surprise").reach, "dawning leans in, surprise pulls back");
+  ok((e("unimpressed").lookX ?? 0) === 0 && e("bored").lookX > .5, "unimpressed is still looking at you; bored has looked away");
+  ok((e("unimpressed").browA ?? 0) === 0 && e("annoyed").browA > 0, "and it carries none of annoyed's irritation");
+  ok(e("eyeroll").lookY <= -1, "the eyes actually go up");
+
+  const face = (mood: string, hold: number | null) => `script:
+- type: "editor"
+  start: 100
+  end: 200
+  text: "Roll Intro"
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "The inner query runs first and hands its answer up."
+- type: "face"
+  start: 200
+  end: 300
+  mood: "${mood}"
+  delay: 2000
+${hold === null ? "" : `  hold: ${hold}\n`}`;
+  const held = (m: string, h: number | null) => checkText(face(m, h)).filter((x) => x.rule === "face-hold");
+  ok(held("eyeroll", 900).length === 0, "an eye roll is meant to snap back");
+  ok(held("eyeroll", null).length === 1, "and held, it is a stare at the ceiling");
+  ok(held("skeptical", 2500).length === 1, "skeptical settles, so a hold on it is still a twitch");
+  ok(held("unimpressed", null).length === 0, "a deadpan with no hold is exactly right");
+
+  // one face doing all the work
+  const many = (mood: string, n: number) => `script:
+- type: "editor"
+  start: 100
+  end: 200
+  text: "Roll Intro"
+${Array.from({ length: n }, (_, i) => `- type: "line"
+  actor: "Glitch"
+  start: ${(i + 2) * 100}
+  end: ${(i + 3) * 100}
+  auto: true
+  mood: "${i < n - 6 ? mood : MOOD_NAMES[(i % 9) + 2]}"
+  text: "The inner query runs first and then hands its answer up."`).join("\n")}`;
+  const spread = (t: string) => checkText(t).filter((x) => x.rule === "mood-spread");
+  ok(spread(many("thinking", 30)).length === 1, "a script leaning on one face is flagged");
+  ok(spread(many("thinking", 30))[0].severity === "advice", "as advice: it is a nudge, not a defect");
+  ok(spread(many("thinking", 10)).length === 0, "a short script has too few cues to judge");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
