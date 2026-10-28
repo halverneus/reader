@@ -80,6 +80,12 @@ kbd{font-family:var(--mono);font-size:10px;color:var(--dim);margin-left:6px}
 .cell .who{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
 .cell .txt{white-space:pre-wrap;font-family:var(--mono);font-size:12.5px;line-height:1.5}
 .cell textarea{width:100%;background:#0d0f17;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-family:var(--mono);font-size:12.5px;line-height:1.5;resize:vertical;min-height:34px}
+/* The prompter is 70 columns wide, so that is where a line has to break. The
+   rule is drawn in the cell instead of leaving it to the "line > 70 chars"
+   warning underneath, which only tells you after the fact. `ch` is the
+   advance of one character in the element's own font, so 70ch lands exactly
+   where column 71 would start -- true only because these are monospace. */
+.cell textarea.ruled{background-image:linear-gradient(to right,transparent calc(8px + 70ch),var(--line2) calc(8px + 70ch),var(--line2) calc(8px + 70ch + 1px),transparent calc(8px + 70ch + 1px));background-repeat:no-repeat}
 .cell .x{background:transparent;border:none;color:var(--dim);font-size:16px;line-height:1}
 .cell .x:hover{color:var(--rose)}
 .cell .meta{display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap}

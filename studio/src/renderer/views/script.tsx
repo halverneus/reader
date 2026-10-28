@@ -8,7 +8,7 @@ import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language"
 import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { useStore, toast } from "../store";
 import { loadScriptFile, saveScript, setScriptText, updateScript, createScript } from "../script-io";
-import { Entry, markers, entriesAt, markerBetween, newId, parseScript, STEP_HELP, outroPhases, OUTRO_PHASES, cleanText } from "../../shared/script";
+import { Entry, markers, entriesAt, markerBetween, newId, parseScript, STEP_HELP, outroPhases, OUTRO_PHASES, cleanText, rewrapEntry } from "../../shared/script";
 import { checkScript, type Finding } from "../../shared/check";
 import { MOOD_NAMES } from "../../../glitch/moods";
 import type { ScriptFileInfo } from "../../shared/ipc";
@@ -145,11 +145,21 @@ function Slot({ marker, entries, hot }: { marker: number; entries: Entry[]; hot?
     sc.entries.push(e);
   });
   const insertAfter = () => updateScript((sc) => { const m = markerBetween(sc, marker); sc.entries.push({ id: newId(), type: "line", actor: "Dev", start: m, end: entries[0]?.end ?? m + 100, text: "" }); });
+  // Re-flow this marker's prose to the 70 columns the prompter is ruled for.
+  // Nothing happens when nothing is over, rather than marking the script
+  // dirty to tell him it was already fine.
+  const wrap = () => {
+    const ids = entries.filter((e) => rewrapEntry(e) !== e).map((e) => e.id);
+    if (!ids.length) return toast("Nothing to wrap: this marker is already inside 70 columns", "info");
+    updateScript((sc) => { sc.entries = sc.entries.map((e) => (ids.includes(e.id) ? rewrapEntry(e) : e)); });
+    toast(`Wrapped ${ids.length} block${ids.length === 1 ? "" : "s"} to 70 columns`, "ok");
+  };
   return (
     <div class={"slot" + (hot ? " hot" : "")} data-marker={marker}>
       <div class="marker"><span>{marker}</span>
         <button onClick={() => add("line")} title="add dialogue">+line</button><button onClick={() => add("editor")} title="add editor note">+note</button><button onClick={() => add("keys")} title="add keys">+keys</button><button onClick={() => add("face")} title="add Glitch expression">+face</button><button onClick={() => add("slide")} title="add slide">+slide</button><button onClick={() => add("outro")} title="add the branded outro (last marker)">+outro</button>
         <button onClick={insertAfter} title="insert a marker after this one">↓ ins</button>
+        <button onClick={wrap} title="Re-flow the dialogue and notes here to 70 columns, keeping paragraph breaks">↵ wrap</button>
       </div>
       <div class="cells">{entries.map((e) => <Cell key={e.id} e={e} />)}</div>
     </div>
@@ -170,16 +180,16 @@ function Cell({ e }: { e: Entry }) {
       </div>
       <div>
         {e.type === "line" && <>
-          <textarea value={e.text} rows={Math.max(1, e.text.split("\n").length)} onInput={(ev: any) => patch({ text: ev.currentTarget.value } as any)} placeholder="Dialogue. Inline cues like [curious] change Glitch's face mid-line." />
+          <textarea class="ruled" value={e.text} rows={Math.max(1, e.text.split("\n").length)} onInput={(ev: any) => patch({ text: ev.currentTarget.value } as any)} placeholder="Dialogue. Inline cues like [curious] change Glitch's face mid-line." />
           <div class="meta">
             {e.actor === "Glitch" && <SayButton text={e.text} actor="Glitch" />}
             <select value={e.actor} onChange={(ev: any) => patch({ actor: ev.currentTarget.value } as any)}><option>Dev</option><option>Glitch</option></select>
             <select value={e.mood ?? ""} onChange={(ev: any) => patch({ mood: ev.currentTarget.value || undefined } as any)}><option value="">mood: (carry the last one)</option>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
             {e.text.split("\n").some((l) => l.length > 70) && <span class="mono" style="color:var(--rose);font-size:11px">line &gt; 70 chars</span>}
           </div></>}
-        {e.type === "editor" && <textarea value={e.text} rows={Math.max(1, e.text.split("\n").length)} onInput={(ev: any) => patch({ text: ev.currentTarget.value } as any)} placeholder="Notes for the editor (never spoken)" />}
+        {e.type === "editor" && <textarea class="ruled" value={e.text} rows={Math.max(1, e.text.split("\n").length)} onInput={(ev: any) => patch({ text: ev.currentTarget.value } as any)} placeholder="Notes for the editor (never spoken)" />}
         {e.type === "keys" && <>
-          <textarea ref={keysRef} class="mono" value={e.keystrokes.join("\n")} rows={Math.max(2, e.keystrokes.length)} onInput={(ev: any) => patch({ keystrokes: ev.currentTarget.value.split("\n") } as any)} placeholder={STEP_HELP} title={STEP_HELP} />
+          <textarea ref={keysRef} class="mono" spellcheck={false} value={e.keystrokes.join("\n")} rows={Math.max(2, e.keystrokes.length)} onInput={(ev: any) => patch({ keystrokes: ev.currentTarget.value.split("\n") } as any)} placeholder={STEP_HELP} title={STEP_HELP} />
           <div class="meta"><SendKeysButton e={e} area={keysRef} /><span class="muted" style="font-size:11px">speed</span><input type="number" min={1} max={10} style="width:56px" value={e.speed ?? 10} onChange={(ev: any) => patch({ speed: +ev.currentTarget.value } as any)} /><span class="muted" style="font-size:11px">one step per line · k: t: p: w: m:</span></div></>}
         {e.type === "face" && <div class="meta">
           <select value={e.mood} onChange={(ev: any) => patch({ mood: ev.currentTarget.value } as any)}>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
@@ -301,7 +311,7 @@ function OutroCell({ e, patch }: { e: Entry & { type: "outro" }; patch: (p: any)
       {phases.map((ph) => (
         <div class="meta" style="align-items:flex-start;margin-top:6px" key={ph.phase}>
           <span class="chip face" style="margin-top:6px;min-width:76px;text-align:center">{ph.phase}</span>
-          <textarea style="flex:1;min-height:34px" value={ph.text} rows={Math.max(1, ph.text.split("\n").length)} onChange={(ev: any) => setPhase(ph.phase, "text", ev.currentTarget.value)} title="What Glitch says during this phase. Inline [mood] tags allowed." />
+          <textarea class="ruled" style="flex:1;min-height:34px" value={ph.text} rows={Math.max(1, ph.text.split("\n").length)} onChange={(ev: any) => setPhase(ph.phase, "text", ev.currentTarget.value)} title="What Glitch says during this phase. Inline [mood] tags allowed." />
           <SayButton text={ph.text} actor="Glitch" />
           <select value={ph.mood} onChange={(ev: any) => setPhase(ph.phase, "mood", ev.currentTarget.value)}>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
         </div>

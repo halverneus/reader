@@ -12,6 +12,7 @@ import { registerAssistIpc } from "./assist";
 import { registerPostIpc } from "./post";
 import { registerDiagnoseIpc } from "./diagnose";
 import { startBridge, stopBridge, setOpenScript, registerBridgeIpc } from "./bridge";
+import { installContextMenu } from "./context-menu";
 
 let win: BrowserWindow | null = null;
 let headlessMode = false;
@@ -28,9 +29,12 @@ function createWindow() {
     title: "Metrik Studio",
     icon: path.join(__dirname, "../renderer/icon-256.png"),
     backgroundColor: "#12141f",
-    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: false },
+    // spellcheck is Chromium's default, but the squiggles under Jeromy's
+    // dialogue are a feature here rather than an accident of the platform.
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: false, spellcheck: true },
   });
   win.setMenuBarVisibility(false);
+  installContextMenu(win);
   win.loadFile(path.join(__dirname, "../renderer/index.html"));
   win.on("closed", () => (win = null));
   // Dev aid: STUDIO_SHOT=/path.png [STUDIO_TAB=record] captures the window after load and quits.

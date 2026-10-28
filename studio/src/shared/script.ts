@@ -273,7 +273,34 @@ export function validate(s: Script): { entryId: string; msg: string }[] {
 export const OUTRO_PHASES: OutroPhaseName[] = ["thanks", "credits", "next", "subscribe"];
 export interface ResolvedPhase { phase: OutroPhaseName; title: string; subtitle: string; names: string[]; text: string; mood: string; minMs: number }
 /** Lines are read off a teleprompter, so they are kept to 70 columns. */
-export const wrap70 = (t: string) => { const out: string[] = []; let cur = ""; for (const w of t.split(/\s+/)) { if ((cur + " " + w).trim().length > 70) { out.push(cur.trim()); cur = w; } else cur += " " + w; } if (cur.trim()) out.push(cur.trim()); return out.join("\n"); };
+export const wrap70 = (t: string) => { const out: string[] = []; let cur = ""; for (const w of t.split(/\s+/)) { if (cur.trim() && (cur + " " + w).trim().length > 70) { out.push(cur.trim()); cur = w; } else cur += " " + w; } if (cur.trim()) out.push(cur.trim()); return out.join("\n"); };
+
+/** Re-flow text to the teleprompter's 70 columns, keeping paragraph breaks.
+ *
+ *  `wrap70` treats every run of whitespace alike, so a blank line between two
+ *  thoughts folds into the paragraph above it. Building an outro that never
+ *  mattered, because the text goes in one sentence at a time. Re-flowing a
+ *  cell Jeromy has already written, it does: a blank line is the one break in
+ *  a block he put there himself, and losing it changes the read rather than
+ *  the formatting. So each paragraph is wrapped on its own (2026-10-28). */
+export const rewrap = (t: string) => t.split(/\n[ \t]*\n/).map(wrap70).filter(Boolean).join("\n\n");
+
+/** The same, for whatever in an entry is prose. Returns the entry UNCHANGED
+ *  by identity when there was nothing to do, so a caller can count the real
+ *  changes and leave the script clean when the answer is none.
+ *
+ *  `keys` is the one kind skipped: a line break there is a step boundary, not
+ *  a wrap, and re-flowing it would rewrite the keystrokes. Outro phases are
+ *  only touched where the script spells one out; the defaults arrive wrapped
+ *  already and materialising them here would write text nobody typed. */
+export function rewrapEntry(e: Entry): Entry {
+  if (e.type === "line" || e.type === "editor") { const text = rewrap(e.text); return text === e.text ? e : { ...e, text }; }
+  if (e.type === "outro" && e.phases?.length) {
+    const phases = e.phases.map((p) => (p.text ? { ...p, text: rewrap(p.text) } : p));
+    return phases.some((p, i) => p.text !== e.phases![i].text) ? { ...e, phases } : e;
+  }
+  return e;
+}
 const joinNames = (n: string[]) => n.length <= 1 ? n.join("") : n.length === 2 ? `${n[0]} and ${n[1]}` : `${n.slice(0, -1).join(", ")}, and ${n[n.length - 1]}`;
 /** Fill in defaults so the production engine, the renderer and the editor all see the same phases. */
 export function outroPhases(e: OutroEntry): ResolvedPhase[] {

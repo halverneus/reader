@@ -6,7 +6,7 @@
 import { verbless, runup, checkText, COURSEWORK, errorsOf } from "../shared/check";
 import { Editor, replayText } from "../shared/wb";
 import { keyStatus } from "../shared/keys";
-import { parseScript, serializeScript } from "../shared/script";
+import { parseScript, serializeScript, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
 import { markerDiff } from "../shared/diff";
 import { crossRepeats } from "../shared/across";
 import { MOODS, MOOD_NAMES } from "../../glitch/moods";
@@ -607,6 +607,48 @@ ${Array.from({ length: n }, (_, i) => `- type: "line"
   ok(spread(many("thinking", 30)).length === 1, "a script leaning on one face is flagged");
   ok(spread(many("thinking", 30))[0].severity === "advice", "as advice: it is a nudge, not a defect");
   ok(spread(many("thinking", 10)).length === 0, "a short script has too few cues to judge");
+}
+
+// ── the wrap button in a slot ───────────────────────────────────────────────
+group("re-flowing a cell to 70 columns");
+{
+  const long = "The inner query runs first, hands its one answer up to the outer query, and the outer query compares every row against it.";
+  const lines = (t: string) => t.split("\n");
+
+  ok(lines(rewrap(long)).every((l) => l.length <= 70), "every line comes back inside 70 columns");
+  ok(rewrap(long).replace(/\s+/g, " ") === long, "and not one word is lost or reordered");
+  ok(lines(rewrap(long)).length === 2, "it fills each line rather than breaking early");
+
+  // the one break in a cell that is HIS, not the wrapper's
+  const para = "Run it once and look at the row count.\n\nNow change the operator and run it again.";
+  ok(rewrap(para).includes("\n\n"), "a blank line between two thoughts survives the re-flow");
+  ok(rewrap(para) === para, "and short paragraphs are left exactly as they were");
+  ok(rewrap("a\n\n\n\nb") === "a\n\nb", "a run of blank lines collapses to one break");
+
+  // soft breaks are the wrapper's own and may be moved
+  ok(rewrap("The inner query runs\nfirst and then hands\nits answer up.") === "The inner query runs first and then hands its answer up.",
+    "single newlines are wrapping, so they re-flow into one line");
+
+  // wrap70 used to emit a leading blank line for a word it could not fit,
+  // which the slot button made reachable where the outro builder never did
+  const huge = "x".repeat(80);
+  ok(wrap70(huge) === huge, "an unbreakable word goes on its own line, with no blank line before it");
+  ok(wrap70("ok " + huge) === "ok\n" + huge, "and the words before it still get their own line");
+
+  ok(rewrap("") === "" && rewrap("   ") === "", "empty stays empty");
+
+  // entry-level: identity is the signal that nothing needed doing
+  const line = { id: "a", type: "line", actor: "Glitch", start: 100, end: 200, text: long } as Entry;
+  const short = { id: "b", type: "line", actor: "Dev", start: 200, end: 300, text: "Run it." } as Entry;
+  const keys = { id: "c", type: "keys", start: 300, end: 400, keystrokes: ["t:SELECT * FROM sale WHERE total > 20 AND barista_id = 3 AND shop_id = 1;", "k:enter"] } as Entry;
+  ok(rewrapEntry(short) === short, "an entry already inside 70 columns comes back as the same object");
+  ok(rewrapEntry(line) !== line && (rewrapEntry(line) as any).text.includes("\n"), "an over-long line is re-flowed");
+  ok(rewrapEntry(keys) === keys, "keystrokes are never re-flowed: a line break there is a step, not a wrap");
+
+  const outro = { id: "d", type: "outro", start: 500, end: 600, phases: [{ phase: "thanks", text: long }] } as Entry;
+  ok((rewrapEntry(outro) as any).phases[0].text.split("\n").length === 2, "an outro phase spelled out in the script is re-flowed too");
+  const bare = { id: "e", type: "outro", start: 500, end: 600 } as Entry;
+  ok(rewrapEntry(bare) === bare, "an outro on its defaults is left alone rather than materialised");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
