@@ -420,6 +420,13 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
     P.guides.push({ comment: "Intro", pos: introAt, type: 6 });
   }
   const devRect = cfg.dev.rect;
+  // Where Dev's box is standing. Carried from one piece to the next on
+  // purpose: the keyframes below start afresh at every take boundary, so
+  // without this a splice in the middle of a beat snaps him back across the
+  // frame between two sentences. No script moved him at all until W06L07
+  // stepped him aside to uncover Glitch's stamp, which is why it has never
+  // shown up before (2026-10-28).
+  let devAt = { x: devRect.x, y: devRect.y };
   for (const p of pieces) {
     const s = p.seg, speed = p.speed, len = lenOf(p), at = p.at;
     const inOf = (t: number) => (speed ? Math.round(fr(t) / speed) : fr(t));
@@ -428,12 +435,13 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
     if (cCam) {
       const inC = inOf(p.src0 + camOffset);
       const fullFrame = introMarker >= 0 && s.marker < introMarker; // cold open: Dev big
-      const keys: { at: number; x: number; y: number; w: number; h: number }[] = fullFrame ? [] : [{ at: 0, ...devRect }];
+      const keys: { at: number; x: number; y: number; w: number; h: number }[] = fullFrame ? [] : [{ at: 0, ...devRect, ...devAt }];
       for (const e of evs.filter((e: any) => e.kind === "slide" && e.actor === "Dev" && rel(e.t) >= p.src0 && rel(e.t) < p.src1)) {
         const k = atOf(rel(e.t)) - at; const over = Math.max(1, fr((e.over ?? 600) / 1000));
         const to = e.to === "left" ? { x: cfg.dev.leftX, y: devRect.y } : e.to === "hide" ? { x: devRect.x, y: 1080 } : { x: devRect.x, y: devRect.y };
-        const from = keys.at(-1) ?? { x: devRect.x, y: devRect.y };
+        const from = keys.at(-1) ?? devAt;
         keys.push({ at: k, x: from.x, y: from.y, w: devRect.w, h: devRect.h }, { at: k + over, x: to.x, y: to.y, w: devRect.w, h: devRect.h });
+        devAt = to;
       }
       const filters: string[] = []; if (cCam.file !== devAlpha) filters.push(chromaFilter(inC, cfg.capture.key)); if (keys.length) filters.push(rectFilter(keys.map((k) => ({ ...k, at: k.at + inC }))));
       if (inC >= 0) { P.place("devV", { clip: cCam, at, in: inC, len, speed, filters }); if (cCam.hasAudio && !cMic) P.place("devA", { clip: cCam, at, in: inC, len, speed }); }
