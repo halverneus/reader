@@ -4,7 +4,7 @@
 // cases are lines Jeromy flagged by hand; the "must pass" ones are lines an
 // over-eager rule tried to rewrite, which is the more expensive failure.
 import { verbless, runup, checkText, COURSEWORK, errorsOf } from "../shared/check";
-import { Editor, replayText } from "../shared/wb";
+import { Editor, replayText, SUSPICIOUS } from "../shared/wb";
 import { keyStatus } from "../shared/keys";
 import { parseScript, serializeScript, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
 import { markerDiff } from "../shared/diff";
@@ -649,6 +649,23 @@ group("re-flowing a cell to 70 columns");
   ok((rewrapEntry(outro) as any).phases[0].text.split("\n").length === 2, "an outro phase spelled out in the script is re-flowed too");
   const bare = { id: "e", type: "outro", start: 500, end: 600 } as Entry;
   ok(rewrapEntry(bare) === bare, "an outro on its defaults is left alone rather than materialised");
+}
+
+group("a botched keystroke count, and what is not one");
+{
+  // W06L08 sets the session time zone and then selects in the SAME Run: two
+  // statements is the demonstration, not a mistake. `;\s*\S` called both of
+  // those runs botched, which is how a real defect two markers away went
+  // unnoticed (2026-10-28).
+  ok(!SUSPICIOUS.test("SET time_zone = '+00:00';\nSELECT booked_at\nFROM appointments;"),
+     "a second statement on the next line is not a botched edit");
+  ok(!SUSPICIOUS.test("SELECT a FROM t;"), "one clean statement is not flagged");
+  ok(!SUSPICIOUS.test("SELECT a FROM t;\n"), "nor is a trailing newline");
+
+  ok(SUSPICIOUS.test("SELECT a FROM t; x"), "junk after the semicolon on the same line still is");
+  ok(SUSPICIOUS.test("SELECT f(a);)"), "so is a paren the backspaces failed to eat");
+  ok(SUSPICIOUS.test("SELECT f(a) ;"), "so is a space the cursor left behind the semicolon");
+  ok(SUSPICIOUS.test("SELECT f(g(a))"), "so is an auto-closed paren nobody removed");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

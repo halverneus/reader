@@ -41,7 +41,9 @@ export const KEY_VOCABULARY: KeyFact[] = [
   { key: "ctrl+right", status: "modelled", note: "Next word." },
   { key: "ctrl+shift+up", status: "verified", note: "Extends the selection up ONE line per press. Workbench overrides Scintilla's default here (Scintilla's own Ctrl+Shift+Up is PARAUPEXTEND, extend to the previous blank-line paragraph, which would have selected to the top of the whole statement on the first press). Confirmed 2026-10-22 from the W06 L03 recording: three presses at marker 8800, correct statement, recorded in one take with no retake. shift+up is still the clearer thing to write." },
   { key: "ctrl+shift+down", status: "modelled", note: "Assumed to mirror ctrl+shift+up (one line per press), but never used in a recorded script. Prefer shift+down." },
-  { key: "alt+tab", status: "verified", note: "Swap between the deck and Workbench. Flips which window has focus." },
+  { key: "alt+tab", status: "verified", note: "Swap between the deck and the other window. Flips which one has focus." },
+  { key: "super", status: "verified", note: "Opens the Windows Start menu over whatever is on screen; typing then searches it and enter launches the best match. Focus leaves the deck and does not come back without an alt+tab. Observed in the recording VM 2026-10-28, opening the MySQL command line client." },
+  { key: "ctrl+shift+l", status: "verified", note: "Terminal.ClearBuffer in Windows Terminal, bound by hand in its settings.json. Clears the screen AND the scrollback so each statement's output is framed the same way. Not a default binding: if settings.json is ever reset this key does nothing and the demo merely scrolls. Observed in the recording VM 2026-10-28." },
   { key: "f7", status: "verified", note: "Navigation, per the recording rules." },
   { key: "f11", status: "verified", note: "Browser fullscreen for the deck." },
 ];

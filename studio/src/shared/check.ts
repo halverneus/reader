@@ -370,13 +370,21 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
     }
   }
 
-  // ── focus: k:right only on the deck, typing only in Workbench
-  let focus: "deck" | "wb" = "deck";
+  // ── focus: k:right only on the deck, typing only in the other window
+  //
+  // "the other window" used to mean Workbench and nothing else, because
+  // alt+tab was the only way a script ever left the deck. W06L08 opens the
+  // MySQL command line client from the Start menu instead, which also takes
+  // focus away from the deck and never comes back to it without an alt+tab,
+  // so k:super has to move this model too (2026-10-28). Without that every
+  // typed character in that lesson read as typing into the slides.
+  let focus: "deck" | "app" = "deck";
   for (const e of [...s.entries].filter((x) => x.type === "keys").sort((a, b) => a.start - b.start)) {
     for (const tok of (e as any).keystrokes as string[]) {
-      if (tok === "k:alt+tab") focus = focus === "deck" ? "wb" : "deck";
-      else if (tok === "k:right" && focus !== "deck") err("focus", "k:right while Workbench has focus", e);
-      else if ((tok.startsWith("t:") || tok.startsWith("m:move 1800")) && focus !== "wb") err("focus", "typing or Run while the deck has focus", e);
+      if (tok === "k:alt+tab") focus = focus === "deck" ? "app" : "deck";
+      else if (tok === "k:super") focus = "app";
+      else if (tok === "k:right" && focus !== "deck") err("focus", "k:right while another window has focus", e);
+      else if ((tok.startsWith("t:") || tok.startsWith("m:move 1800")) && focus !== "app") err("focus", "typing or Run while the deck has focus", e);
     }
   }
 

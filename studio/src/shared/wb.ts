@@ -209,5 +209,11 @@ export function replayText(text: string) {
   return replay(parseScript(text).script);
 }
 
-/** Endings that mean a counted edit went wrong. */
-export const SUSPICIOUS = /(\);\)|\)\s;|\)\)\s*$|;\s*\S)/;
+/** Endings that mean a counted edit went wrong.
+ *
+ *  The `;` clause deliberately does NOT cross a newline. A Run may hold more
+ *  than one statement -- W06L08 sets the session time zone and then selects,
+ *  which is the whole demonstration -- and `;\s*\S` flagged every one of
+ *  those as a botched edit. Junk after a semicolon ON THE SAME LINE is still
+ *  the backspace-count mistake this is here to catch (2026-10-28). */
+export const SUSPICIOUS = /(\);\)|\)\s;|\)\)\s*$|;[^\S\n]*\S)/;
