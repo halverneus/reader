@@ -192,6 +192,7 @@ export class DevRig {
   private mouthShape!: SVGElement; private mouthLine!: SVGElement;
   private neck!: SVGElement; private sterno!: SVGElement; private shirt!: SVGElement; private seams!: SVGElement;
   private armShapes: { body: SVGElement; line: SVGElement; side: number }[] = [];
+  private gLayer?: SVGElement;
   private micParts: SVGElement[] = []; private micDetail!: SVGElement; private micDot!: SVGElement;
 
   constructor(svg: SVGSVGElement | SVGGElement, opts: { x?: number; y?: number; scale?: number } = {}) {
@@ -311,6 +312,17 @@ export class DevRig {
     const mg = el("g", { transform: `translate(0,${MOUTH_Y})` }, h);
     this.mouthShape = el("path", { filter: "url(#dvx-glow)" }, mg);
     this.mouthLine = el("path", { fill: "none", "stroke-width": 5, "stroke-linecap": "round", filter: "url(#dvx-glow)" }, mg);
+  }
+
+  /** An empty group BEHIND the shirt, for something else to draw a limb into.
+   *  A gesturing arm has to sit under the tee the way the resting ones do, or
+   *  it reads as laid on top of him. */
+  gestureLayer(): SVGElement {
+    if (!this.gLayer) {
+      this.gLayer = el("g");
+      this.shirt.parentNode!.insertBefore(this.gLayer, this.shirt);
+    }
+    return this.gLayer;
   }
 
   /** Hide one resting arm, for when something else is drawing it: a gesture
