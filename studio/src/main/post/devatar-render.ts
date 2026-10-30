@@ -53,7 +53,7 @@ export async function renderDevatar(dir: string, session: any, log: Log): Promis
   cues.sort((a, b) => a.t - b.t);
   log(`[devatar] ${total} frames @ ${fps} fps, ${cues.length} cues\n`);
 
-  const av = cfg.dev?.avatar ?? { x: 982, y: 352, scale: 0.9 };
+  const av = cfg.dev?.avatar ?? { x: 965, y: 357, scale: 1.363 };
   const win = new BrowserWindow({ show: false, width: 1920, height: 1080, webPreferences: { backgroundThrottling: false } });
   await win.loadFile(path.join(__dirname, "../renderer/devatar.html"), {
     query: { manual: "1", seed: String(cfg.glitch.seed), x: String(av.x), y: String(av.y), scale: String(av.scale) },

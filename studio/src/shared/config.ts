@@ -68,7 +68,7 @@ export const DEFAULTS: Config = {
   glitch: { homeY: 300, seed: 7, scale: 1, size: 0.75 },
   // avatar x/y/scale place the drawn bust where the matted camera puts the
   // real one, so a cross-fade lands head on head. Nudge if the swap drifts.
-  dev: { rect: { x: 1152, y: 648, w: 768, h: 432 }, leftX: 0, avatar: { x: 982, y: 352, scale: 0.9 } },
+  dev: { rect: { x: 1152, y: 648, w: 768, h: 432 }, leftX: 0, avatar: { x: 965, y: 357, scale: 1.363 } },
 };
 
 export function deepMerge<T>(a: T, b: any): T {

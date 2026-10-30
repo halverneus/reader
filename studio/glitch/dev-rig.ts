@@ -168,10 +168,14 @@ function mouthPath(W: number, Hh: number, s: Expr, open: number) {
   return { xl, xr, yl, yr, cb, path: `M${xl},${yl} Q0,${cb} ${xr},${yr} Q0,${ct} ${xl},${yl}Z` };
 }
 
-/** Where the bust sits in the 1920x1080 frame. Defaults put the head where the
- *  matted camera puts Dev's, so the same rect keyframes place either one and a
- *  cross-fade lands head on head. */
-export const DEV_LAYOUT = { W: 1920, H: 1080, x: 982, y: 352, scale: 0.9 };
+/** Where the bust sits in the 1920x1080 frame. `y` is his EYE LINE, because
+ *  the rig's local origin is the eye line, and `scale` is set so the avatar's
+ *  outer-eye span matches his.
+ *
+ *  Measured 2026-10-29 against a matted frame from Week 06 / 07: his span is
+ *  179 px, centred at x 965 with the eye line at y 357. Re-measure if the
+ *  camera or the seating ever moves. */
+export const DEV_LAYOUT = { W: 1920, H: 1080, x: 965, y: 357, scale: 1.363 };
 
 export class DevRig {
   private root: SVGElement; private inner: SVGElement; private headG!: SVGElement; private neckG!: SVGElement;
@@ -186,7 +190,14 @@ export class DevRig {
   constructor(svg: SVGSVGElement | SVGGElement, opts: { x?: number; y?: number; scale?: number } = {}) {
     if (svg.tagName.toLowerCase() === "svg") svg.setAttribute("viewBox", `0 0 ${DEV_LAYOUT.W} ${DEV_LAYOUT.H}`);
     defs(svg as SVGSVGElement);
-    const L = { ...DEV_LAYOUT, ...opts };
+    // Spreading opts would let an explicit `undefined` (which is exactly what
+    // the page passes when a query param is absent) overwrite the default and
+    // produce translate(undefined,undefined), which SVG silently ignores.
+    const L = {
+      x: opts.x ?? DEV_LAYOUT.x,
+      y: opts.y ?? DEV_LAYOUT.y,
+      scale: opts.scale ?? DEV_LAYOUT.scale,
+    };
     this.root = el("g", { transform: `translate(${L.x},${L.y}) scale(${L.scale})` }, svg);
     this.inner = el("g", {}, this.root);
     let h = this.inner;
