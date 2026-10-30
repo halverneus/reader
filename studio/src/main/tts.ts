@@ -180,6 +180,36 @@ export function registerTtsIpc() {
     } catch (e: any) { return { error: e.message }; }
   });
   ipcMain.handle("devvoice:status", () => pollDevVoice());
+  // Everything the Voice tab needs, proxied through here.
+  //
+  // The renderer cannot reach the service itself: the page's CSP allows
+  // http://localhost:* and the service answers on http://127.0.0.1, which
+  // CSP treats as an unrelated origin. Rather than widen it, main owns the
+  // conversation — which is also the rule everywhere else in this feature.
+  const dv = async (route: string, init?: RequestInit) => {
+    const { url } = loadConfig().devVoice;
+    const r = await fetch(url.replace(/\/$/, "") + route, init);
+    if (!r.ok) throw new Error(String(r.status));
+    return r;
+  };
+  ipcMain.handle("devvoice:list", async (_e, q: { lesson?: string; search?: string }) => {
+    const p = new URLSearchParams();
+    if (q?.lesson) p.set("lesson", q.lesson);
+    if (q?.search) p.set("q", q.search);
+    try { return await (await dv("/list?" + p.toString())).json(); } catch { return null; }
+  });
+  ipcMain.handle("devvoice:stats", async () => {
+    try { return await (await dv("/stats")).json(); } catch { return null; }
+  });
+  ipcMain.handle("devvoice:clip", async (_e, key: string) => {
+    try { return Buffer.from(await (await dv("/clip?key=" + encodeURIComponent(key))).arrayBuffer()).toString("base64"); }
+    catch { return null; }
+  });
+  const post = (route: string, body: any) => dv(route, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  }).then((r) => r.json()).catch((e) => ({ error: e.message }));
+  ipcMain.handle("devvoice:delete", (_e, keys: string[]) => post("/delete", { keys }));
+  ipcMain.handle("devvoice:unoverride", (_e, text: string) => post("/unoverride", { text }));
   /** Save a hand-performed take for one line.
    *
    *  The renderer can only capture WebM, and the service stores and serves

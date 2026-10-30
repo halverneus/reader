@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { useStore, toast } from "../store";
+import { toast } from "../store";
 
 /** Everything the voice service has rendered, and the controls to curate it.
  *
@@ -16,8 +16,6 @@ interface Stats { clips: number; bytes: number; recorded: number; lessons: { les
 const mb = (n: number) => (n / 1048576).toFixed(1) + " MB";
 
 export function VoiceView() {
-  const { config } = useStore();
-  const base = (config?.devVoice?.url ?? "http://127.0.0.1:8899").replace(/\/$/, "");
   const [clips, setClips] = useState<Clip[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [lesson, setLesson] = useState("");
@@ -27,26 +25,24 @@ export function VoiceView() {
   const [busy, setBusy] = useState(false);
 
   const refresh = async () => {
-    try {
-      const u = new URL(base + "/list");
-      if (lesson) u.searchParams.set("lesson", lesson);
-      if (q) u.searchParams.set("q", q);
-      const [a, b] = await Promise.all([
-        fetch(u.toString()).then((r) => r.json()),
-        fetch(base + "/stats").then((r) => r.json()),
-      ]);
-      setClips(a.clips ?? []); setStats(b);
-    } catch { setClips([]); setStats(null); }
+    const [a, b] = await Promise.all([
+      window.studio.invoke("devvoice:list", { lesson, search: q }).catch(() => null),
+      window.studio.invoke("devvoice:stats").catch(() => null),
+    ]);
+    setClips((a as any)?.clips ?? []); setStats(b as any);
   };
   useEffect(() => { refresh(); }, [lesson, q]);
 
-  const play = (k: string) => { new Audio(`${base}/clip?key=${encodeURIComponent(k)}&t=${Date.now()}`).play().catch(() => {}); };
+  const play = async (k: string) => {
+    const b64: any = await window.studio.invoke("devvoice:clip", k).catch(() => null);
+    if (b64) new Audio("data:audio/wav;base64," + b64).play().catch(() => {});
+  };
 
   const remove = async () => {
     if (!sel.size) return;
     setBusy(true);
     try {
-      await fetch(base + "/delete", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ keys: [...sel] }) });
+      await window.studio.invoke("devvoice:delete", [...sel]);
       toast(`Deleted ${sel.size} clip(s)`, "info"); setSel(new Set()); refresh();
     } finally { setBusy(false); }
   };
@@ -74,7 +70,7 @@ export function VoiceView() {
   const stopRec = () => { rec?.mr.stop(); setRec(null); };
 
   const clearOverride = async (c: Clip) => {
-    await fetch(base + "/unoverride", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: c.text }) });
+    await window.studio.invoke("devvoice:unoverride", c.text);
     toast("Back to the generated take", "info"); refresh();
   };
 
