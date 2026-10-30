@@ -75,14 +75,18 @@ export async function micSpeech(file: string, micOffset: number): Promise<Span[]
 interface Clip { id: number; kind: "av" | "video" | "audio" | "image"; file: string; name: string; frames: number; hasAudio: boolean; hasVideo: boolean }
 interface Placed { clip: Clip; at: number; in: number; len: number; speed?: number; filters?: string[] } // frames
 interface Track { name: string; audio: boolean; items: Placed[] }
-type TrackKey = "muA" | "ovA" | "devA" | "glA" | "bgV" | "glV" | "devV" | "avV" | "faceV" | "ovV";
-const ORDER: TrackKey[] = ["muA", "ovA", "devA", "glA", "bgV", "glV", "devV", "avV", "faceV", "ovV"];
+// Dev has two audio tracks on purpose: the microphone he spoke into, and the
+// cloned voice the drawn avatar is read with. They never overlap -- the mic
+// ends where the avatar begins -- but they are mixed differently, so keeping
+// them apart is what makes the hand-over editable.
+type TrackKey = "muA" | "ovA" | "devA" | "avA" | "glA" | "bgV" | "glV" | "devV" | "avV" | "faceV" | "ovV";
+const ORDER: TrackKey[] = ["muA", "ovA", "devA", "avA", "glA", "bgV", "glV", "devV", "avV", "faceV", "ovV"];
 
 class Project {
   clips: Clip[] = []; nextId = 4; xml: string[] = []; producers: string[] = []; nProd = 0; nFilter = 0;
   guides: { comment: string; pos: number; type: number }[] = [];
   tracks: Record<TrackKey, Track> = {
-    muA: { name: "Music", audio: true, items: [] }, ovA: { name: "Overlays", audio: true, items: [] }, devA: { name: "Dev", audio: true, items: [] }, glA: { name: "Glitch", audio: true, items: [] },
+    muA: { name: "Music", audio: true, items: [] }, ovA: { name: "Overlays", audio: true, items: [] }, devA: { name: "Dev", audio: true, items: [] }, avA: { name: "Avatar Dev", audio: true, items: [] }, glA: { name: "Glitch", audio: true, items: [] },
     bgV: { name: "Background", audio: false, items: [] }, glV: { name: "Glitch", audio: false, items: [] }, devV: { name: "Dev", audio: false, items: [] }, avV: { name: "Avatar Dev", audio: false, items: [] }, faceV: { name: "Glitch Face", audio: false, items: [] }, ovV: { name: "Overlays", audio: false, items: [] },
   };
   async addClip(file: string, kind: Clip["kind"], name = path.basename(file)): Promise<Clip> {
@@ -453,47 +457,55 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
     const inOf = (t: number) => (speed ? Math.round(fr(t) / speed) : fr(t));
     const atOf = (t: number) => at + Math.round(fr(t - p.src0) / (speed ?? 1));
     P.place("glV", { clip: cDesk, at, in: inOf(p.src0), len, speed });
+    // Dev's box and the slides that move it. Both the camera and the avatar
+    // ride in it, so it is worked out once whether or not a camera exists:
+    // an all-avatar episode records no camera at all.
+    const fullFrame = introMarker >= 0 && s.marker < introMarker; // cold open: Dev big
+    const keys: { at: number; x: number; y: number; w: number; h: number }[] = fullFrame ? [] : [{ at: 0, ...devRect, ...devAt }];
+    for (const e of evs.filter((e: any) => e.kind === "slide" && e.actor === "Dev" && rel(e.t) >= p.src0 && rel(e.t) < p.src1)) {
+      const k = atOf(rel(e.t)) - at; const over = Math.max(1, fr((e.over ?? 600) / 1000));
+      const to = e.to === "left" ? { x: cfg.dev.leftX, y: devRect.y } : e.to === "hide" ? { x: devRect.x, y: 1080 } : { x: devRect.x, y: devRect.y };
+      const from = keys.at(-1) ?? devAt;
+      keys.push({ at: k, x: from.x, y: from.y, w: devRect.w, h: devRect.h }, { at: k + over, x: to.x, y: to.y, w: devRect.w, h: devRect.h });
+      devAt = to;
+    }
     if (cCam) {
       const inC = inOf(p.src0 + camOffset);
-      const fullFrame = introMarker >= 0 && s.marker < introMarker; // cold open: Dev big
-      const keys: { at: number; x: number; y: number; w: number; h: number }[] = fullFrame ? [] : [{ at: 0, ...devRect, ...devAt }];
-      for (const e of evs.filter((e: any) => e.kind === "slide" && e.actor === "Dev" && rel(e.t) >= p.src0 && rel(e.t) < p.src1)) {
-        const k = atOf(rel(e.t)) - at; const over = Math.max(1, fr((e.over ?? 600) / 1000));
-        const to = e.to === "left" ? { x: cfg.dev.leftX, y: devRect.y } : e.to === "hide" ? { x: devRect.x, y: 1080 } : { x: devRect.x, y: devRect.y };
-        const from = keys.at(-1) ?? devAt;
-        keys.push({ at: k, x: from.x, y: from.y, w: devRect.w, h: devRect.h }, { at: k + over, x: to.x, y: to.y, w: devRect.w, h: devRect.h });
-        devAt = to;
-      }
       const filters: string[] = []; if (cCam.file !== devAlpha) filters.push(chromaFilter(inC, cfg.capture.key)); if (keys.length) filters.push(rectFilter(keys.map((k) => ({ ...k, at: k.at + inC }))));
-      if (inC >= 0) { P.place("devV", { clip: cCam, at, in: inC, len, speed, filters }); if (cCam.hasAudio && !cMic) P.place("devA", { clip: cCam, at, in: inC, len, speed }); }
-      // The avatar takes the same box and the same slides; only its opacity
-      // differs. It is rendered from recording t=0, so it carries no camOffset.
-      if (cAvatar) {
-        const inA = inOf(p.src0);
-        const kf: [number, number][] = [[inA, avatarAt(p.src0)]];
-        for (const sw of swaps) {
-          if (sw.t + sw.over < p.src0 || sw.t > p.src1) continue;
-          const f0 = inA + Math.round(fr(sw.t - p.src0) / (speed ?? 1));
-          kf.push([f0, avatarAt(sw.t)], [f0 + Math.round(fr(sw.over) / (speed ?? 1)), sw.to]);
-        }
-        kf.push([inA + len - 1, avatarAt(p.src1)]);
-        const af: string[] = [];
-        if (keys.length) af.push(rectFilter(keys.map((k) => ({ ...k, at: k.at + inA }))));
-        af.push(alphaKeys(kf.sort((a, b) => a[0] - b[0])));
-        if (inA >= 0) P.place("avV", { clip: cAvatar, at, in: inA, len, speed, filters: af });
+      // the camera file ends at the avatar swap on an episode that never comes
+      // back to it, so the clip is only as long as there is footage
+      const camLen = Math.max(0, Math.min(len, cCam.frames - inC));
+      if (inC >= 0 && camLen > 0) { P.place("devV", { clip: cCam, at, in: inC, len: camLen, speed, filters }); if (cCam.hasAudio && !cMic) P.place("devA", { clip: cCam, at, in: inC, len: camLen, speed }); }
+    }
+    // The avatar takes the same box and the same slides; only its opacity
+    // differs. It is rendered from recording t=0, so it carries no camOffset.
+    if (cAvatar) {
+      const inA = inOf(p.src0);
+      const kf: [number, number][] = [[inA, avatarAt(p.src0)]];
+      for (const sw of swaps) {
+        if (sw.t + sw.over < p.src0 || sw.t > p.src1) continue;
+        const f0 = inA + Math.round(fr(sw.t - p.src0) / (speed ?? 1));
+        kf.push([f0, avatarAt(sw.t)], [f0 + Math.round(fr(sw.over) / (speed ?? 1)), sw.to]);
       }
+      kf.push([inA + len - 1, avatarAt(p.src1)]);
+      const af: string[] = [];
+      if (keys.length) af.push(rectFilter(keys.map((k) => ({ ...k, at: k.at + inA }))));
+      af.push(alphaKeys(kf.sort((a, b) => a[0] - b[0])));
+      if (inA >= 0) P.place("avV", { clip: cAvatar, at, in: inA, len, speed, filters: af });
     }
     if (cMic) {
       // no sound from before the take began (pre-roll under the intro may reach into an earlier take)
       const m0 = Math.max(p.src0, s.t0), mAt = atOf(m0), inM = inOf(m0 + micOffset);
-      if (inM >= 0) P.place("devA", { clip: cMic, at: mAt, in: inM, len: at + len - mAt, speed });
+      // like the camera, the mic file can end at the swap
+      const micLen = Math.max(0, Math.min(at + len - mAt, cMic.frames - inM));
+      if (inM >= 0 && micLen > 0) P.place("devA", { clip: cMic, at: mAt, in: inM, len: micLen, speed });
     }
     if (cGlitch) P.place("faceV", { clip: cGlitch, at, in: inOf(p.src0), len, speed });
     for (const v of voice) {
       const t = rel(v.t); if (t < Math.max(p.src0, s.t0) || t >= p.src1) continue;
       const c = await P.addClip(v.audio, "audio", path.basename(v.audio));
       const vAt = atOf(t); const l = Math.min(c.frames, at + len - vAt);
-      if (l > 0) P.place("glA", { clip: c, at: vAt, in: 0, len: l });
+      if (l > 0) P.place(v.actor === "Dev" ? "avA" : "glA", { clip: c, at: vAt, in: 0, len: l });
     }
     const gPos = atOf(Math.max(p.src0, s.t0));
     const first = entriesAt(script, s.marker).find((e) => e.type === "line") as any;
@@ -507,7 +519,7 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
     const fade = fr(OUTRO.fadeOut);
     P.place("ovV", { clip: cOut, at: outroAt, in: 0, len: cOut.frames, filters: [fadeToBlack(cOut.frames - fade, fade)] });
     if (cOut.hasAudio) P.place("ovA", { clip: cOut, at: outroAt, in: 0, len: cOut.frames, filters: [fadeOut(cOut.frames - fade, fade)] });
-    for (const v of voice) { const t = rel(v.t); if (t < outro.t0 || t >= outro.t1) continue; const c = await P.addClip(v.audio, "audio", path.basename(v.audio)); const vAt = outroAt + fr(t - outro.t0); const l = Math.min(c.frames, outroAt + cOut.frames - vAt); if (l > 0) P.place("glA", { clip: c, at: vAt, in: 0, len: l }); }
+    for (const v of voice) { const t = rel(v.t); if (t < outro.t0 || t >= outro.t1) continue; const c = await P.addClip(v.audio, "audio", path.basename(v.audio)); const vAt = outroAt + fr(t - outro.t0); const l = Math.min(c.frames, outroAt + cOut.frames - vAt); if (l > 0) P.place(v.actor === "Dev" ? "avA" : "glA", { clip: c, at: vAt, in: 0, len: l }); }
     P.guides.push({ comment: "Outro", pos: outroAt, type: 6 });
   }
   const total = P.end();

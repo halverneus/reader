@@ -260,7 +260,7 @@ tools.push({
 
 tools.push({
   name: "script_set",
-  description: "Create or replace a whole entry at a marker. Kinds: line, editor, keys, face, slide, outro. Prefer script_edit_text for a wording change.",
+  description: "Create or replace a whole entry at a marker. Kinds: line, editor, keys, face, slide, avatar, outro. Prefer script_edit_text for a wording change.",
   inputSchema: S({
     file: str("path to Script.yml"), marker: int("start marker"),
     kind: str("line | editor | keys | face | slide | outro"),
@@ -279,6 +279,7 @@ tools.push({
     else if (kind === "keys") e = { ...base, type: "keys", keystrokes: d.keystrokes ?? [], speed: d.speed };
     else if (kind === "face") e = { ...base, type: "face", actor: d.actor === "Dev" ? "Dev" : undefined, mood: d.mood ?? "neutral", hold: d.hold, delay: d.delay };
     else if (kind === "slide") e = { ...base, type: "slide", actor: d.actor === "Glitch" ? "Glitch" : "Dev", to: d.to ?? "left", over: d.over };
+    else if (kind === "avatar") e = { ...base, type: "avatar", to: d.to === "real" ? "real" : "avatar", over: d.over };
     else if (kind === "outro") e = { ...base, type: "outro", next: d.next || undefined, thanks: d.thanks ?? undefined, phases: d.phases ?? undefined };
     else throw new Error("unknown kind " + kind);
     const i = s.entries.findIndex((x) => x.start === m && x.type === kind && (kind !== "line" || (x as any).actor === (e as any).actor));

@@ -194,7 +194,7 @@ function Slot({ marker, entries, hot }: { marker: number; entries: Entry[]; hot?
   const has = (t: string) => entries.some((e) => e.type === t);
   const add = (type: Entry["type"]) => updateScript((sc) => {
     const end = entries[0]?.end ?? marker + 100; const base = { id: newId(), start: marker, end };
-    const e: Entry = type === "line" ? { ...base, type, actor: has("line") ? "Glitch" : "Dev", text: "" } : type === "editor" ? { ...base, type, text: "" } : type === "keys" ? { ...base, type, keystrokes: [] } : type === "face" ? { ...base, type, mood: "curious" } : type === "outro" ? { ...base, type: "outro", next: "", thanks: [] } : { ...base, type: "slide", actor: "Dev", to: "left" };
+    const e: Entry = type === "line" ? { ...base, type, actor: has("line") ? "Glitch" : "Dev", text: "" } : type === "editor" ? { ...base, type, text: "" } : type === "keys" ? { ...base, type, keystrokes: [] } : type === "face" ? { ...base, type, mood: "curious" } : type === "outro" ? { ...base, type: "outro", next: "", thanks: [] } : type === "avatar" ? { ...base, type: "avatar", to: "avatar", over: 1600 } : { ...base, type: "slide", actor: "Dev", to: "left" };
     sc.entries.push(e);
   });
   const insertAfter = () => updateScript((sc) => { const m = markerBetween(sc, marker); sc.entries.push({ id: newId(), type: "line", actor: "Dev", start: m, end: entries[0]?.end ?? m + 100, text: "" }); });
@@ -210,7 +210,7 @@ function Slot({ marker, entries, hot }: { marker: number; entries: Entry[]; hot?
   return (
     <div class={"slot" + (hot ? " hot" : "")} data-marker={marker}>
       <div class="marker"><span>{marker}</span>
-        <button onClick={() => add("line")} title="add dialogue">+line</button><button onClick={() => add("editor")} title="add editor note">+note</button><button onClick={() => add("keys")} title="add keys">+keys</button><button onClick={() => add("face")} title="add Glitch expression">+face</button><button onClick={() => add("slide")} title="add slide">+slide</button><button onClick={() => add("outro")} title="add the branded outro (last marker)">+outro</button>
+        <button onClick={() => add("line")} title="add dialogue">+line</button><button onClick={() => add("editor")} title="add editor note">+note</button><button onClick={() => add("keys")} title="add keys">+keys</button><button onClick={() => add("face")} title="add an expression (Glitch by default; switch it to Dev for the avatar)">+face</button><button onClick={() => add("slide")} title="add slide">+slide</button><button onClick={() => add("avatar")} title="swap real Dev for the drawn avatar, or back">+avatar</button><button onClick={() => add("outro")} title="add the branded outro (last marker)">+outro</button>
         <button onClick={insertAfter} title="insert a marker after this one">↓ ins</button>
         <button onClick={wrap} title="Re-flow the dialogue and notes here to 70 columns, keeping paragraph breaks">↵ wrap</button>
       </div>
@@ -268,9 +268,14 @@ function Cell({ e }: { e: Entry }) {
           <textarea ref={keysRef} class="mono" spellcheck={false} value={e.keystrokes.join("\n")} rows={Math.max(2, e.keystrokes.length)} onInput={(ev: any) => patch({ keystrokes: ev.currentTarget.value.split("\n") } as any)} placeholder={STEP_HELP} title={STEP_HELP} />
           <div class="meta"><SendKeysButton e={e} area={keysRef} /><span class="muted" style="font-size:11px">speed</span><input type="number" min={1} max={10} style="width:56px" value={e.speed ?? 10} onChange={(ev: any) => patch({ speed: +ev.currentTarget.value } as any)} /><span class="muted" style="font-size:11px">one step per line · k: t: p: w: m:</span></div></>}
         {e.type === "face" && <div class="meta">
+          <select value={e.actor ?? "Glitch"} title="whose face this is. Dev means the drawn avatar, which only exists after an avatar swap." onChange={(ev: any) => patch({ actor: ev.currentTarget.value === "Dev" ? "Dev" : undefined } as any)}><option>Glitch</option><option>Dev</option></select>
           <select value={e.mood} onChange={(ev: any) => patch({ mood: ev.currentTarget.value } as any)}>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
           <span class="muted" style="font-size:11px" title="wait this long after the marker before the face changes">delay ms</span><input type="number" min={0} step={100} style="width:80px" value={e.delay ?? 0} onChange={(ev: any) => patch({ delay: +ev.currentTarget.value || undefined } as any)} />
           <span class="muted" style="font-size:11px" title="Snap back to the previous face after this long. Leave it at 0 and the face stays until something else changes it — which is what you want for anything but a flinch.">revert after ms</span><input type="number" min={0} step={100} style="width:80px" value={e.hold ?? 0} onChange={(ev: any) => patch({ hold: +ev.currentTarget.value || undefined } as any)} /><span class="muted" style="font-size:11px">{e.hold ? `then back to the previous face` : `stays until the next cue`}</span></div>}
+        {e.type === "avatar" && <div class="meta">
+          <select value={e.to} onChange={(ev: any) => patch({ to: ev.currentTarget.value } as any)}><option value="avatar">to the avatar</option><option value="real">back to the camera</option></select>
+          <span class="muted" style="font-size:11px">cross-fade ms</span><input type="number" min={0} step={100} style="width:80px" value={e.over ?? 1600} onChange={(ev: any) => patch({ over: +ev.currentTarget.value } as any)} />
+          <span class="muted" style="font-size:11px">{e.to === "avatar" ? "from here Dev is drawn: his lines are machine-read, the markers advance themselves, and the camera and mic stop" : "from here Dev is on camera again"}</span></div>}
         {e.type === "outro" && <OutroCell e={e} patch={patch} />}
         {e.type === "slide" && <div class="meta">
           <select value={e.actor} onChange={(ev: any) => patch({ actor: ev.currentTarget.value } as any)}><option>Dev</option><option>Glitch</option></select>

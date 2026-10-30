@@ -6,7 +6,7 @@
 import { verbless, runup, checkText, COURSEWORK, errorsOf } from "../shared/check";
 import { Editor, replayText, SUSPICIOUS } from "../shared/wb";
 import { keyStatus } from "../shared/keys";
-import { parseScript, serializeScript, splitMoodTags, speechChunks, validate, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
+import { cameraPlan, parseScript, serializeScript, splitMoodTags, speechChunks, validate, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
 import { GESTURE_NAMES, gestureLength } from "../../glitch/dev-hands-data";
 import { markerDiff } from "../shared/diff";
 import { crossRepeats } from "../shared/across";
@@ -721,6 +721,48 @@ group("a botched keystroke count, and what is not one");
   ok(SUSPICIOUS.test("SELECT f(a);)"), "so is a paren the backspaces failed to eat");
   ok(SUSPICIOUS.test("SELECT f(a) ;"), "so is a space the cursor left behind the semicolon");
   ok(SUSPICIOUS.test("SELECT f(g(a))"), "so is an auto-closed paren nobody removed");
+}
+
+group("what the camera is still for");
+{
+  const scr = (...extra: string[]) => parseScript(`script:
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "Greetings."
+${extra.join("\n")}`).script;
+  const sw = (start: number, to: string) => `- type: "avatar"
+  start: ${start}
+  end: ${start + 100}
+  to: "${to}"`;
+
+  const none = cameraPlan(scr());
+  ok(none.srcs.length === 3 && none.dropAtMarker == null, "a script with no swap films everything, start to end");
+
+  const once = cameraPlan(scr(sw(300, "avatar")));
+  ok(once.srcs.length === 3, "a script that starts on camera still needs the camera");
+  ok(once.dropAtMarker === 300, "and the camera and mic end at the swap");
+
+  const back = cameraPlan(scr(sw(300, "avatar"), sw(500, "real")));
+  ok(back.dropAtMarker == null, "a script that returns to camera keeps both to the end");
+
+  const again = cameraPlan(scr(sw(300, "avatar"), sw(500, "real"), sw(700, "avatar")));
+  ok(again.dropAtMarker === 700, "with a return and a second swap, the LAST swap is the one that ends them");
+
+  const all = parseScript(`script:
+- type: "avatar"
+  start: 100
+  end: 200
+  to: "avatar"
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "Greetings."
+`).script;
+  ok(cameraPlan(all).srcs.join() === "desktop", "drawn before the first line: the camera never comes on");
+  ok(cameraPlan(all).dropAtMarker == null, "and there is nothing to drop part way");
 }
 
 group("avatar Dev's hands");

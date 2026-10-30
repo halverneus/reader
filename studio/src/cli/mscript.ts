@@ -31,6 +31,7 @@ kinds and their json fields:
   keys     {"keystrokes":["k:ctrl+a","t:code","m:click"],"speed":1-10?}
   face     {"mood":"malice","actor":"Dev"?,"delay":2000?,"hold":800?}   delay = wait before the face changes; hold = revert after; actor Dev is avatar Dev's own face, otherwise Glitch's
   slide    {"actor":"Dev|Glitch","to":"left|right|top|bottom|hide|show","over":600?}
+  avatar   {"to":"avatar|real","over":1600?}   swap real Dev for the drawn one (or back); over = cross-fade ms
   outro    {"next":"Dictionaries","thanks":["Nicole"],"phases":[{"phase":"next","text":"…","mood":"deception"}]?}
 Inline [mood] tags inside any text switch Glitch's face mid-line. [pause 500] (ms; [pause] = 500) is a real silence in the voice (Kokoro ignores "..." and commas); Glitch's mouth stops for it. Lines ≤ 70 chars. Every text line must be speakable. [hand greeting] / [hand signoff] inside a DEV line starts avatar Dev's arm at that word: the palm-forward hello into the hand on his chest, and the point down the lens for the sign-off.
 "end" defaults to the next marker (or start+100); pass "end" in the json to override.`;
@@ -126,6 +127,7 @@ function main(argv: string[]) {
       else if (kind === "keys") e = { ...base, type: "keys", keystrokes: d.keystrokes ?? [], speed: d.speed };
       else if (kind === "face") e = { ...base, type: "face", actor: d.actor === "Dev" ? "Dev" : undefined, mood: d.mood ?? "neutral", hold: d.hold, delay: d.delay };
       else if (kind === "slide") e = { ...base, type: "slide", actor: d.actor === "Glitch" ? "Glitch" : "Dev", to: d.to ?? "left", over: d.over };
+      else if (kind === "avatar") e = { ...base, type: "avatar", to: d.to === "real" ? "real" : "avatar", over: d.over };
       else if (kind === "outro") e = { ...base, type: "outro", next: d.next || undefined, thanks: d.thanks ?? undefined, phases: d.phases ?? undefined };
       else throw new Error("unknown kind " + kind);
       const i = s.entries.findIndex((x) => x.start === marker && x.type === kind && (kind !== "line" || (x as any).actor === (e as any).actor));

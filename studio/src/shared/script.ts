@@ -107,6 +107,29 @@ export function serializeScript(script: Script): string {
     .split("\n").map((l) => (l ? "  " + l : l)).join("\n").replace(/\n  (- type:)/g, "\n\n  $1").replace(/^\s*\n/, "");
 }
 
+/** What the camera and the microphone are for in this script.
+ *
+ *  Real Dev is only in front of the lens until the drawn avatar takes over,
+ *  and once it has, nothing he does reaches the recording: his lines are
+ *  machine-read and his picture is drawn. Leaving the camera running past
+ *  that point records an empty room for the rest of the lesson.
+ *
+ *  `srcs` is what the take should record at all -- an episode that is drawn
+ *  from its first line never turns the camera on. `dropAtMarker` is the swap
+ *  after which he never returns to camera, so the camera and the mic can be
+ *  finalised there. A script that ends back on the real camera keeps both. */
+export function cameraPlan(s: Script): { srcs: string[]; dropAtMarker?: number } {
+  const all: string[] = ["desktop", "cam", "mic"];
+  const sw = s.entries.filter((e) => e.type === "avatar") as AvatarEntry[];
+  if (!sw.length || sw[sw.length - 1].to !== "avatar") return { srcs: all };
+  const lastReal = [...sw].reverse().find((e) => e.to === "real");
+  const finalOn = sw.find((e) => e.to === "avatar" && (!lastReal || e.start > lastReal.start));
+  if (!finalOn) return { srcs: all };
+  const firstLine = s.entries.filter((e) => e.type === "line").map((e) => e.start).sort((a, b) => a - b)[0];
+  if (firstLine == null || finalOn.start <= firstLine) return { srcs: ["desktop"] };
+  return { srcs: all, dropAtMarker: finalOn.start };
+}
+
 // ── markers / slots ──────────────────────────────────────────────────────────
 export const markers = (s: Script) => [...new Set(s.entries.map((e) => e.start))].sort((a, b) => a - b);
 export const entriesAt = (s: Script, marker: number) => s.entries.filter((e) => e.start === marker);

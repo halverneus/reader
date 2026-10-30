@@ -4,8 +4,11 @@
 //
 // Three things drive him, and only one of them is authored:
 //   * mood   — `face` entries with actor: Dev
-//   * talk   — Dev's own mic, so the mouth follows the voice that is actually
-//              in the mix rather than a guess at reading speed
+//   * talk   — his own cloned voice. Every Dev line is machine-read once the
+//              avatar is up, and the wav's length and its internal silences
+//              are logged, so the mouth follows the audio that is actually in
+//              the mix. An older session where Dev read on camera instead
+//              falls back to the mic.
 //   * gaze   — he turns toward Glitch whenever Glitch is speaking, which is
 //              the behaviour you want often enough that authoring it per line
 //              would just be noise
@@ -17,6 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../config";
 import type { Log } from "./pipeline";
+import { talkCues } from "../../shared/script";
 import { micSpeech } from "./kdenlive";
 
 /** True when the script ever swaps to the avatar; otherwise the step is free. */
@@ -46,13 +50,21 @@ export async function renderDevatar(dir: string, session: any, log: Log): Promis
     else if (e.kind === "line-end" && e.actor === "Glitch") cues.push({ t, toGlitch: false });
     else if (e.kind === "reset") cues.push({ t, mood: "neutral", toGlitch: false, talk: false, gesture: null });
   }
-  // the mouth, from the mic rather than from the script
-  const micRaw: string | undefined = [session.meta.files?.mic, path.join(dir, "mic.flac")].find((f: string) => f && fs.existsSync(f));
-  if (micRaw) {
-    const spans = await micSpeech(micRaw, session.meta.micOffset ?? 0);
-    for (const [a, b] of spans) { cues.push({ t: a, talk: true }); cues.push({ t: b, talk: false }); }
-    log(`[devatar] ${spans.length} speech spans from the mic\n`);
-  } else log("[devatar] no mic track — the mouth will stay closed\n");
+  // the mouth. Machine-read Dev lines carry their own duration and their
+  // internal silences, which beats measuring a microphone that may not have
+  // been running at all.
+  const spoken = session.events.filter((e: any) => e.kind === "line-start" && e.actor === "Dev" && e.spoken);
+  if (spoken.length) {
+    for (const e of spoken) for (const c of talkCues((e.t - t0) / 1000, e)) cues.push({ t: c.t, talk: c.talk });
+    log(`[devatar] ${spoken.length} spoken Dev lines drive the mouth\n`);
+  } else {
+    const micRaw: string | undefined = [session.meta.files?.mic, path.join(dir, "mic.flac")].find((f: string) => f && fs.existsSync(f));
+    if (micRaw) {
+      const spans = await micSpeech(micRaw, session.meta.micOffset ?? 0);
+      for (const [a, b] of spans) { cues.push({ t: a, talk: true }); cues.push({ t: b, talk: false }); }
+      log(`[devatar] ${spans.length} speech spans from the mic\n`);
+    } else log("[devatar] no spoken Dev lines and no mic track — the mouth will stay closed\n");
+  }
   cues.sort((a, b) => a.t - b.t);
   log(`[devatar] ${total} frames @ ${fps} fps, ${cues.length} cues\n`);
 

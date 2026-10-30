@@ -13,7 +13,10 @@ export interface SessionMeta {
   /** source position for desktop time t is t + offset (seconds) */
   camOffset?: number; micOffset?: number;
   capture?: { backend: "gstreamer" | "obs"; encoder?: string; first?: Record<string, number>; stopError?: string;
-    /** capture stopped mid-take (wall ms) and why — the files end there */ lostAt?: number; lostWhy?: string };
+    /** capture stopped mid-take (wall ms) and why — the files end there */ lostAt?: number; lostWhy?: string;
+    /** which sources this take recorded at all */ srcs?: string[];
+    /** sources finalised on purpose part way through (wall ms): the camera and
+     *  the mic when the drawn avatar took the shot over */ dropped?: Record<string, number> };
 }
 let current: { meta: SessionMeta; events: any[]; flushTimer?: NodeJS.Timeout } | null = null;
 export const currentSession = () => current?.meta ?? null;
@@ -45,7 +48,7 @@ function pushEvent(ev: any) {
   clearTimeout(current.flushTimer); current.flushTimer = setTimeout(flush, 500);
 }
 
-export async function startSession(scriptPath: string) {
+export async function startSession(scriptPath: string, srcs?: string[]) {
   if (current) await stopSession();
   const { dir, name } = sessionDirFor(scriptPath);
   fs.mkdirSync(dir, { recursive: true });
@@ -57,8 +60,8 @@ export async function startSession(scriptPath: string) {
     Object.assign(meta, { recordStart: rec.startedAt, startedAt: rec.startedAt, files: rec.files, capture: { backend: "obs" } });
   } else {
     // one clock for all three files: t=0 is the desktop file's first frame, offsets place cam and mic against it
-    const rec = await capture.startRecording(dir);
-    Object.assign(meta, { recordStart: rec.startedAt, startedAt: rec.startedAt, files: rec.files, camOffset: rec.camOffset, micOffset: rec.micOffset, capture: { backend: "gstreamer", encoder: capture.encoder, first: rec.first } });
+    const rec = await capture.startRecording(dir, srcs);
+    Object.assign(meta, { recordStart: rec.startedAt, startedAt: rec.startedAt, files: rec.files, camOffset: rec.camOffset, micOffset: rec.micOffset, capture: { backend: "gstreamer", encoder: capture.encoder, first: rec.first, srcs: srcs ?? ["desktop", "cam", "mic"] } });
   }
   current = { meta, events: [] };
   flush();
@@ -82,12 +85,22 @@ export async function stopSession() {
 }
 
 export function registerSessionIpc() {
-  ipcMain.handle("session:start", (_e, { scriptPath }) => startSession(scriptPath));
+  ipcMain.handle("session:start", (_e, { scriptPath, srcs }) => startSession(scriptPath, srcs));
   ipcMain.handle("session:stop", () => stopSession());
+  // the drawn avatar has taken the shot over: end the camera and the mic here
+  ipcMain.handle("session:drop", (_e, { srcs }) => (currentSession() ? capture.dropSources(srcs ?? []) : []));
   ipcMain.handle("session:event", (_e, ev) => pushEvent(ev));
   ipcMain.handle("session:current", () => currentSession());
   // the Kdenlive generator drops a "camera froze here" guide at each of these
   capture.onFreeze = (src, reason, at) => pushEvent({ kind: "freeze", t: Math.round(at), src, reason });
+  // a source that ended on purpose: post needs to read the short track as
+  // deliberate rather than as a dropout
+  capture.onDropped = (src, _path, at) => {
+    if (!current) return;
+    current.meta.capture = { ...current.meta.capture!, dropped: { ...(current.meta.capture?.dropped ?? {}), [src]: Math.round(at) } };
+    pushEvent({ kind: "source-end", t: Math.round(at), src });
+    flush();
+  };
   // the take keeps running in the prompter, but nothing is being recorded any more: say so, loudly, and
   // leave a mark in the session so post refuses to build a project from it without explaining why
   capture.onLost = (why) => {

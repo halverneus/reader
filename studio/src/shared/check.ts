@@ -327,6 +327,16 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
       const clash = s.entries.find((o) => o.type === "face" && (o as any).actor === "Dev" && o.start === e.start);
       if (clash) adv("avatar", `the swap at ${e.start} already puts avatar Dev into the glitch mood; the Dev face on the same marker will be overwritten`, e);
     }
+    // Nothing else in the file switches the avatar on. A Dev face or a hand
+    // gesture is addressed to a character who is never drawn, so it does
+    // nothing -- and, worse, Dev's lines stay human-read and the markers stay
+    // manual, which is only discovered mid-take.
+    if (!sw.some((e) => e.to === "avatar")) {
+      const dev = s.entries.find((e) => e.type === "face" && (e as any).actor === "Dev");
+      const hand = s.entries.find((e) => e.type === "line" && (e as any).actor === "Dev" && splitMoodTags((e as any).text).hands.length);
+      const who = dev ?? hand;
+      if (who) err("avatar", `marker ${who.start} is addressed to avatar Dev, but the script never swaps him in: add an avatar entry (to: avatar) before it`, who);
+    }
   }
 
   // ── a face that un-plays itself

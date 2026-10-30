@@ -1,7 +1,7 @@
 // Production engine: drives the prompter, TTS, keystrokes, Glitch moods/slides, and the take/event log.
 // Semantics ported from the Rust reader (advance/rewind/auto/keys blocking) and extended.
 import { useEffect, useState } from "preact/hooks";
-import { Entry, entriesAt, nextMarker, splitMoodTags, cleanText, outroPhases, timeAtChar, speechGaps, SpeechSpan } from "../shared/script";
+import { Entry, cameraPlan, entriesAt, nextMarker, splitMoodTags, cleanText, outroPhases, timeAtChar, speechGaps, SpeechSpan } from "../shared/script";
 import { getState, toast } from "./store";
 import { glitch, devatar } from "./components/glitch-stage";
 
@@ -24,6 +24,10 @@ class Production {
   private recStart = 0;
   private sessionDir: string | null = null;
   private lineCounter = 0;
+  /** The swap after which Dev never returns to camera: the take finalises the
+   *  camera and the microphone there. Null when the script ends on camera. */
+  private dropAtMarker: number | null = null;
+  private droppedSrcs: string[] = [];
   private keepAlive: AudioContext | null = null;
 
   subscribe(f: () => void) { this.subs.add(f); return () => { this.subs.delete(f); }; }
@@ -60,6 +64,11 @@ class Production {
     const prev = this.history.pop();
     if (prev == null) return;
     this.stopAll();
+    // The camera and the mic were closed at the swap. Going back before it
+    // would re-shoot that stretch with nothing filming, which is only
+    // discovered in post, so say so now.
+    if (this.st.recording && this.droppedSrcs.length && this.dropAtMarker != null && prev < this.dropAtMarker)
+      toast("The camera and mic already stopped at the avatar swap: stop and record this take again to redo anything before it", "error", true);
     this.set({ marker: prev, take: this.st.recording ? this.st.take + 1 : this.st.take });
     this.log("rewind", { to: prev });
   }
@@ -92,7 +101,11 @@ class Production {
     // waiting on a human: every marker advances itself until the swap back.
     // The `auto` flags in the script stay meaningful for the real-Dev stretch
     // before it.
-    const anyAuto = evs.some((e) => e.auto) || this.st.avatar;
+    // The swap marker itself counts: once the dissolve is under way nobody is
+    // reading on camera any more, so waiting for a key press there just leaves
+    // him sitting in front of a camera that has already cut away from him.
+    const swapsIn = evs.some((e) => e.type === "avatar" && e.to === "avatar");
+    const anyAuto = evs.some((e) => e.auto) || this.st.avatar || swapsIn;
     let lineToSpeak: Entry | null = null;
 
     for (const e of evs) {
@@ -120,6 +133,15 @@ class Production {
         // Let the dissolve finish before the next marker fires, or the first
         // avatar beat lands while he is still half camera.
         if (e.to === "avatar") waits.push(new Promise<void>((r) => this.cueTimers.push(window.setTimeout(r, over))));
+        // ...and once it HAS finished, if he never comes back to camera, stop
+        // filming the empty chair. The files are closed properly, so what was
+        // recorded up to here is intact and the cut is unaffected.
+        if (e.to === "avatar" && this.st.recording && e.start === this.dropAtMarker) {
+          this.cueTimers.push(window.setTimeout(async () => {
+            const gone: string[] = await window.studio.invoke("session:drop", { srcs: ["cam", "mic"] }).catch(() => []);
+            if (gone.length) { this.droppedSrcs = gone; toast("Camera and mic stopped: avatar Dev has the shot from here", "ok"); }
+          }, over + 150));
+        }
       }
       else if (e.type === "slide") {
         if (e.actor === "Glitch") glitch.slide(e.to as any, e.over ?? 600);
@@ -279,14 +301,20 @@ class Production {
   async startRecording() {
     const { scriptPath } = getState();
     if (!scriptPath) { toast("Open a script first", "error"); return; }
+    const plan = cameraPlan(getState().script);
+    this.dropAtMarker = plan.dropAtMarker ?? null;
     try {
-      const r = await window.studio.invoke("session:start", { scriptPath });
+      const r = await window.studio.invoke("session:start", { scriptPath, srcs: plan.srcs });
       this.sessionDir = r.dir; this.recStart = r.startedAt;
       this.wakeAudio();
       this.lineCounter = 0;
+      this.droppedSrcs = [];
       this.set({ recording: true, take: 1 });
-      this.log("session-start", { scriptPath, marker: this.st.marker });
-      toast(`Recording → ${r.dir.split("/").slice(-2).join("/")}`, "ok");
+      this.log("session-start", { scriptPath, marker: this.st.marker, srcs: plan.srcs });
+      const where = r.dir.split("/").slice(-2).join("/");
+      toast(plan.srcs.length === 1
+        ? `Recording the screen only → ${where} — avatar Dev reads the whole script, so there is nothing to film`
+        : `Recording → ${where}`, "ok");
     } catch (e: any) { toast(`Record: ${e.message}`, "error"); }
   }
   async stopRecording() {

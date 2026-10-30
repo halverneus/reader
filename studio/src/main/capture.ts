@@ -43,6 +43,11 @@ class Capture {
   private statusTimer?: NodeJS.Timeout;
   private quitting = false; private crashes = 0;
   onFreeze?: (src: string, reason: string, at: number) => void;
+  /** A source was finalised mid-take (the avatar took over): its file ends here. */
+  onDropped?: (src: string, path: string | undefined, at: number) => void;
+  /** Which sources this take is recording, and which of them have already ended. */
+  private recSrcs: string[] = ["desktop", "cam", "mic"];
+  private dropped = new Set<string>();
   /** A take stopped capturing without being asked to (engine stopped, crashed, or the screen/mic pipeline failed). */
   onLost?: (why: string) => void;
   private stopRequested = false;
@@ -89,7 +94,9 @@ class Capture {
       case "hello": this.running = true; this.encoder = m.encoder; this.message = ""; setTimeout(() => { if (this.running) this.crashes = 0; }, 30000); break;
       case "state":
         // the camera recovers on its own (black frames, then a new source); the screen and the mic do not
-        if (m.recording && !this.stopRequested) for (const id of ["desktop", "mic"]) {
+        // a source that was never asked for, or has already been finalised on
+        // purpose, is not a lost take
+        if (m.recording && !this.stopRequested) for (const id of ["desktop", "mic"].filter((x) => this.recSrcs.includes(x) && !this.dropped.has(x))) {
           const now = m.sources?.[id], was = this.sources[id];
           if (now?.status === "error" && was?.status !== "error") this.onLost?.(`${LABELS[id]}: ${now.detail || "failed"}`);
         }
@@ -103,6 +110,7 @@ class Capture {
         break;
       }
       case "frozen": this.frozenAt[m.src] = Date.now(); this.onFreeze?.(m.src, m.reason, m.at ?? Date.now()); break;
+      case "dropped": this.dropped.add(m.src); this.onDropped?.(m.src, m.path, m.at ?? Date.now()); break;
       case "token": saveConfig({ capture: { restoreToken: m.token } } as any); break;
       case "error": this.message = m.msg; process.stderr.write(`[recorder] ${m.msg}\n`); this.settle(m, false); return;
       case "log": process.stdout.write(`[recorder] ${m.msg}\n`); break;
@@ -112,13 +120,23 @@ class Capture {
   }
 
   // ── public API ─────────────────────────────────────────────────────────────
-  async startRecording(dir: string): Promise<RecordTiming> {
+  async startRecording(dir: string, srcs?: string[]): Promise<RecordTiming> {
     if (!this.proc) this.start();
     if (!this.running) await this.wait("hello", "", 8000);
     this.stopRequested = false;
+    this.recSrcs = srcs ?? ["desktop", "cam", "mic"];
+    this.dropped.clear();
     const got = this.wait("recording", "record", 15000);
-    this.send({ cmd: "record", dir });
+    this.send({ cmd: "record", dir, srcs: this.recSrcs });
     return got;
+  }
+  /** End some sources early and keep the take running: the camera and the mic
+   *  when avatar Dev takes the shot over. The desktop cannot be dropped. */
+  dropSources(srcs: string[]) {
+    const want = srcs.filter((n) => n !== "desktop" && this.recSrcs.includes(n) && !this.dropped.has(n));
+    if (!want.length || !this.recording) return [];
+    this.send({ cmd: "drop", srcs: want });
+    return want;
   }
   async stopRecording(): Promise<Partial<RecordTiming>> {
     if (!this.proc || !(this.recording || this.stopping)) return {};

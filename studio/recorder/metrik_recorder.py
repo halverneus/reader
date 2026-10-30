@@ -190,6 +190,7 @@ class Recorder:
         self.eos_pads = {}              # name → pad to push EOS into when stopping
         self.state = {}
         self.recording = False; self.stopping = False; self.rec = None
+        self.dropping = set()           # sources being finalised while the take continues
         self.first = {}                 # name → first recorded running time (ns)
         self.cam_bin = None; self.cam_comp = None; self.cam_gen = 0
         self.cam_last_buf = 0.0; self.cam_last_change = 0.0; self.cam_last_sample = 0.0; self.cam_sig = None; self.cam_attached = 0.0; self.cam_retry_at = 0.0
@@ -214,8 +215,9 @@ class Recorder:
                 self.apply_cfg(msg.get("cfg") or {})
                 if not self.recording: self.rebuild_all()
             elif cmd == "pick": self.pick(restore=False)
-            elif cmd == "record": self.start_recording(msg["dir"])
+            elif cmd == "record": self.start_recording(msg["dir"], msg.get("srcs"))
             elif cmd == "stop": self.stop_recording()
+            elif cmd == "drop": self.drop_sources(msg.get("srcs") or [])
             elif cmd == "resetCam": self.swap_cam_source("manual reset")
             elif cmd == "quit": self.shutdown()
             else: emit("error", msg=f"unknown command {cmd!r}")
@@ -489,7 +491,8 @@ class Recorder:
         elif t == Gst.MessageType.WARNING:
             w, _ = msg.parse_warning(); log(f"[{name}] warning: {w.message}")
         elif t == Gst.MessageType.EOS:
-            if self.stopping and self.rec: self.rec["eos"].add(name); self._maybe_finish()
+            if name in self.dropping: GLib.idle_add(lambda: (self._finish_drop(name), False)[1])
+            elif self.stopping and self.rec: self.rec["eos"].add(name); self._maybe_finish()
 
     def _watchdog(self):
         now = time.monotonic()
@@ -510,16 +513,22 @@ class Recorder:
         self.swap_cam_source(why)
 
     # ── recording ────────────────────────────────────────────────────────────
-    def start_recording(self, rec_dir):
+    def start_recording(self, rec_dir, srcs=None):
         if self.recording or self.stopping: raise RuntimeError("already recording")
         d = self.cfg["desktop"]
         if d.get("mode", "portal") == "portal" and self.portal.fd is None: raise RuntimeError("pick the VM window before recording")
         os.makedirs(rec_dir, exist_ok=True)
+        # An all-avatar episode has nobody in front of the lens and nobody at
+        # the microphone, so it records the screen alone. Asking for fewer
+        # sources also means fewer things that can fail on the way up.
+        want = [n for n in ("desktop", "cam", "mic") if srcs is None or n in srcs]
+        if "desktop" not in want: raise RuntimeError("the desktop is always recorded")
         for n in list(self.pipes): self.teardown(n)
         self.first = {}
-        pipes = [p for p in (self.rebuild(n, rec_dir) for n in ("desktop", "cam", "mic")) if p is not None]
-        missing = [n for n in ("desktop", "cam", "mic") if n not in self.pipes]
-        if "desktop" in missing or "mic" in missing:
+        self.dropping = set()
+        pipes = [p for p in (self.rebuild(n, rec_dir) for n in want) if p is not None]
+        missing = [n for n in want if n not in self.pipes]
+        if missing:
             for n in list(self.pipes): self.teardown(n)
             self.rebuild_all()
             raise RuntimeError(f"cannot record: {', '.join(missing)} failed to start ({'; '.join(self.state.get(n, ('', ''))[1] for n in missing)})")
@@ -528,7 +537,8 @@ class Recorder:
         wall = time.time() * 1000 - (CLOCK.get_time() - now) / 1e6
         for p in pipes: p.set_state(Gst.State.PLAYING)
         self.recording = True
-        self.rec = {"dir": rec_dir, "base_wall": wall, "announced": False, "eos": set(), "files": {n: os.path.join(rec_dir, f) for n, f in (("desktop", "desktop.mkv"), ("cam", "cam.mkv"), ("mic", "mic.flac")) if n in self.pipes}}
+        self.rec = {"dir": rec_dir, "base_wall": wall, "announced": False, "eos": set(), "dropped": {},
+                    "files": {n: os.path.join(rec_dir, f) for n, f in (("desktop", "desktop.mkv"), ("cam", "cam.mkv"), ("mic", "mic.flac")) if n in self.pipes}}
         self.push_state()
         GLib.timeout_add(5000, self._announce_timeout, self.rec)
 
@@ -556,17 +566,45 @@ class Recorder:
         r = self.rec; r["announced"] = True
         emit("recording", files=r["files"], waitingFor=[n for n in r["files"] if n not in self.first], **self._timing())
 
+    def drop_sources(self, names):
+        """Finalise some sources while the take carries on.
+
+        When the drawn avatar takes over there is nobody in front of the lens
+        and nobody at the microphone, so those two files should END there
+        rather than record an empty room for the rest of the lesson. The
+        screen keeps rolling. Each dropped file is closed properly through
+        EOS, so it stays playable and its timing is unchanged."""
+        if not self.recording or self.stopping: return
+        for name in names:
+            pad = self.eos_pads.get(name)
+            if name == "desktop" or name not in self.pipes or pad is None or name in self.dropping: continue
+            self.dropping.add(name)
+            self.rec["dropped"][name] = time.time() * 1000
+            pad.send_event(Gst.Event.new_eos())
+        if self.dropping: self.push_state()
+
+    def _finish_drop(self, name):
+        self.dropping.discard(name)
+        self.teardown(name)
+        path = self.rec["files"].get(name) if self.rec else None
+        self.set_state(name, "off", "stopped at the avatar swap")
+        emit("dropped", src=name, path=path, at=self.rec["dropped"].get(name) if self.rec else None)
+        # the take may have been waiting on this one to call it a day
+        self._maybe_finish()
+
     def stop_recording(self):
         if not self.recording or self.stopping: return
         self.stopping = True; self.push_state()
         for name, pad in list(self.eos_pads.items()):
-            if name in self.pipes: pad.send_event(Gst.Event.new_eos())
+            if name in self.pipes and name not in self.dropping: pad.send_event(Gst.Event.new_eos())
         # safety net for a pipeline that never delivers EOS. Bound to *this* recording: an unbound timer that
         # outlived a clean stop once fired 10 s later into the next take and tore it down unfinalised.
         self.rec["deadline"] = GLib.timeout_add(10000, self._finish, self.rec)
 
     def _maybe_finish(self):
-        if self.rec and all(n in self.rec["eos"] for n in self.pipes): self._finish()
+        # only ever ends a take that was asked to end: "every pipe has sent
+        # EOS" is vacuously true of no pipes at all
+        if self.stopping and self.rec and self.pipes and all(n in self.rec["eos"] for n in self.pipes): self._finish()
 
     def _finish(self, deadline_for=None):
         r = self.rec
@@ -578,7 +616,7 @@ class Recorder:
         for n in list(self.pipes): self.teardown(n)
         files = {n: p for n, p in r["files"].items() if os.path.exists(p) and os.path.getsize(p) > 0}
         self.recording = False; self.stopping = False; self.rec = None
-        emit("stopped", files=files, finalized=clean, **timing)
+        emit("stopped", files=files, finalized=clean, dropped=r.get("dropped") or {}, **timing)
         self.push_state()
         if not getattr(self, "quitting", False): self.rebuild_all()
         else: self.loop.quit()
