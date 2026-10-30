@@ -1,4 +1,4 @@
-import { parseScript, serializeScript, Script } from "../shared/script";
+import { parseScript, serializeScript, Script, splitMoodTags } from "../shared/script";
 import { markerDiff, textHash } from "../shared/diff";
 import { getState, setState, toast } from "./store";
 
@@ -14,6 +14,7 @@ export async function loadScriptFile(p: string, opts: { diff?: boolean } = {}) {
       changed: d && d.touched.length ? { markers: d.touched, at: Date.now() } : null,
     });
     if (errors.length) toast(`Loaded with ${errors.length} issue(s)`, "error");
+    warmClonedVoice(script);
     return d;
   } catch (e: any) { toast(`Could not open script: ${e.message}`, "error"); return null; }
 }
@@ -89,4 +90,27 @@ export function installBridgeListeners() {
 
     answer({ error: `unknown request "${op}"` });
   });
+}
+
+/** Render Dev's lines ahead of time.
+ *
+ *  His cloned voice runs at about real time, so a line asked for on demand
+ *  arrives a beat after it is wanted. Handing the whole script over when it
+ *  opens means the cache is warm long before anyone presses record, and a
+ *  cache hit is a file read. Lines already rendered are skipped by the
+ *  service, so re-opening a script costs nothing.
+ */
+export function warmClonedVoice(script: Script) {
+  const cfg = getState().config;
+  const cloned = Object.entries(cfg?.voices ?? {})
+    .filter(([, v]) => v === "dev-clone").map(([a]) => a);
+  if (!cloned.length) return;
+  const texts = script.entries
+    .filter((e): e is Extract<typeof e, { type: "line" }> => e.type === "line" && cloned.includes(e.actor))
+    .map((e) => splitMoodTags(e.text).clean.trim())
+    .filter((t) => t.length > 0);
+  if (!texts.length) return;
+  window.studio.invoke("devvoice:warm", texts)
+    .then((r: any) => { if (r?.queued) toast(`Rendering ${r.queued} line(s) in Dev's voice`, "info"); })
+    .catch(() => {});
 }

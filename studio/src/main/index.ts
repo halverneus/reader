@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { loadConfig, saveConfig } from "./config";
 import { registerScriptIpc } from "./scripts";
-import { registerTtsIpc, pollKokoro, startKokoroContainer, stopKokoroContainer, kokoroState } from "./tts";
+import { registerTtsIpc, pollKokoro, startKokoroContainer, stopKokoroContainer, kokoroState, pollDevVoice, startDevVoice, stopDevVoice } from "./tts";
 import { registerVmIpc } from "./vm";
 import { registerSessionIpc, stopSession } from "./session";
 import { registerObsIpc, obs } from "./obs";
@@ -113,6 +113,9 @@ app.whenReady().then(async () => {
   const cfg = loadConfig();
   if (cfg.capture.backend === "obs") obs.connect(); else capture.start();
   if ((await pollKokoro()) !== "ready" && cfg.kokoro.autoStart) startKokoroContainer();
+  // Dev's cloned voice runs at about real time, so it has to be up and warm
+  // before anyone records rather than started on the first line.
+  if ((await pollDevVoice()).state !== "ready" && cfg.devVoice?.autoStart) startDevVoice();
   setInterval(() => { pollKokoro(); }, 3000);
   setInterval(() => { if (loadConfig().capture.backend !== "obs") return; if (!obs.connected) obs.connect(); else obs.pushStatus(); }, 4000);
 
@@ -129,6 +132,7 @@ app.on("before-quit", (e) => {
     await stopSession().catch(() => {});
     await capture.quit().catch(() => {});
     if (loadConfig().kokoro.autoStart) stopKokoroContainer();
+    stopDevVoice();
     quitReady = true; app.quit();
   })();
 });

@@ -15,7 +15,28 @@ export let kokoroStartedByUs = false;
 // off for lines that use one (measured: 4.6 s of noise vs 2.5 s spoken correctly). Spell out numbers in those lines.
 const PRONOUNCE_RE = /\[[^\]\n]+\]\(\/[^)\n]+\/\)/;
 
+/** The sentinel voice name that routes to Dev's cloned voice instead of Kokoro. */
+export const CLONE_VOICE = "dev-clone";
+
+/** Dev's own voice, from the local F5-TTS service.
+ *
+ *  Measured on the 3060: the model loads in about 2.5 s and then runs at
+ *  roughly 1.0 to 1.1 times real time, so a four second line costs four
+ *  seconds to make. That is too slow to generate during a take, and it is
+ *  why the service caches every line to disk and the Script view warms the
+ *  whole lesson ahead of time. A cache hit comes back in about 5 ms. */
+async function synthClone(text: string): Promise<Buffer> {
+  const { url } = loadConfig().devVoice;
+  const r = await fetch(url.replace(/\/$/, "") + "/speak", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!r.ok) throw new Error(`Dev voice ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return Buffer.from(await r.arrayBuffer());
+}
+
 async function synth(text: string, voice: string): Promise<Buffer> {
+  if (voice === CLONE_VOICE) return synthClone(text);
   const url = loadConfig().kokoro.url.replace(/\/$/, "") + "/v1/audio/speech";
   const body: any = { model: "kokoro", voice, input: text, response_format: "wav" };
   if (PRONOUNCE_RE.test(text)) body.normalization_options = { normalize: false };
@@ -91,6 +112,44 @@ export function startKokoroContainer(): Promise<void> {
     });
   });
 }
+// ── Dev's voice service ─────────────────────────────────────────────────────
+export let devVoiceState: "down" | "starting" | "ready" = "down";
+let devVoiceProc: any = null;
+
+export async function pollDevVoice(): Promise<{ state: string; queued?: number; rendered?: number }> {
+  const { url } = loadConfig().devVoice;
+  try {
+    const r = await fetch(url.replace(/\/$/, "") + "/health", { signal: AbortSignal.timeout(1500) });
+    if (!r.ok) { devVoiceState = "starting"; return { state: devVoiceState }; }
+    const j: any = await r.json();
+    devVoiceState = j.state === "ready" ? "ready" : "starting";
+    return { state: devVoiceState, queued: j.queued, rendered: j.rendered };
+  } catch { if (devVoiceState === "ready") devVoiceState = "down"; return { state: devVoiceState }; }
+}
+
+/** Spawn the resident F5-TTS service. It needs the venv that has torch. */
+export function startDevVoice(): Promise<void> {
+  const c = loadConfig().devVoice;
+  if (devVoiceProc) return Promise.resolve();
+  const script = [
+    path.join(process.resourcesPath ?? "", "voice/devvoice.py"),
+    path.join(__dirname, "../../voice/devvoice.py"),
+    path.join(__dirname, "../../../voice/devvoice.py"),
+  ].find((p) => fs.existsSync(p));
+  if (!script) { console.error("[devvoice] devvoice.py not found"); return Promise.resolve(); }
+  if (!fs.existsSync(c.python) || !fs.existsSync(c.refWav)) {
+    console.error("[devvoice] python or reference clip missing; leaving it down");
+    return Promise.resolve();
+  }
+  devVoiceState = "starting";
+  const { spawn } = require("node:child_process");
+  devVoiceProc = spawn(c.python, [script, "--port", String(new URL(c.url).port || 8899),
+    "--ref-wav", c.refWav, "--ref-text", c.refText, "--cache", c.cache], { stdio: "ignore", detached: false });
+  devVoiceProc.on("exit", () => { devVoiceProc = null; devVoiceState = "down"; });
+  return Promise.resolve();
+}
+export function stopDevVoice() { try { devVoiceProc?.kill(); } catch {} devVoiceProc = null; }
+
 export function stopKokoroContainer() { if (!kokoroStartedByUs) return; try { execFile("docker", ["stop", "-t", "2", "kokoro-tts"]); } catch {} }
 
 export function registerTtsIpc() {
@@ -105,6 +164,21 @@ export function registerTtsIpc() {
     const wav = await synth(PREVIEW, voice);
     broadcast("tts:play", wav.toString("base64"));
   });
+  // Render ahead. The renderer hands over every line an actor will speak when
+  // a script is opened, so by the time anyone presses record the cache is warm
+  // and playback is a file read.
+  ipcMain.handle("devvoice:warm", async (_e, texts: string[]) => {
+    const { url } = loadConfig().devVoice;
+    try {
+      const r = await fetch(url.replace(/\/$/, "") + "/warm", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ texts }),
+      });
+      return r.ok ? await r.json() : { error: `${r.status}` };
+    } catch (e: any) { return { error: e.message }; }
+  });
+  ipcMain.handle("devvoice:status", () => pollDevVoice());
+  ipcMain.handle("devvoice:start", () => startDevVoice());
   ipcMain.handle("kokoro:start", () => startKokoroContainer());
   ipcMain.handle("kokoro:status", () => pollKokoro());
 }

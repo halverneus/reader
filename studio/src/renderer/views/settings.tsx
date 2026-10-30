@@ -1,7 +1,10 @@
 import { useEffect, useState } from "preact/hooks";
 import { setState, useStore, toast } from "../store";
 
-const VOICES = ["af_alloy","af_aoede","af_bella","af_heart","af_jessica","af_kore","af_nicole","af_nova","af_river","af_sarah","af_sky","am_adam","am_echo","am_eric","am_fenrir","am_liam","am_michael","am_onyx","am_puck","am_santa","bf_alice","bf_emma","bf_isabella","bf_lily","bm_daniel","bm_fable","bm_george","bm_lewis"];
+// "dev-clone" is not a Kokoro voice: it routes to the local F5-TTS service
+// that speaks in Dev's own voice. Listed first because that is the one he
+// wants for Dev.
+const VOICES = ["dev-clone","af_alloy","af_aoede","af_bella","af_heart","af_jessica","af_kore","af_nicole","af_nova","af_river","af_sarah","af_sky","am_adam","am_echo","am_eric","am_fenrir","am_liam","am_michael","am_onyx","am_puck","am_santa","bf_alice","bf_emma","bf_isabella","bf_lily","bm_daniel","bm_fable","bm_george","bm_lewis"];
 
 export function SettingsView() {
   const { config } = useStore();

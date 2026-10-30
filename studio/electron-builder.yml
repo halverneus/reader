@@ -6,6 +6,8 @@ files:
   - dist/**
   - package.json
 extraResources:
+  - from: voice
+    to: voice
   - from: docker
     to: docker
   - from: models
