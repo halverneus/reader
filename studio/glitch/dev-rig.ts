@@ -191,7 +191,7 @@ export class DevRig {
   private eyeL; private eyeR;
   private mouthShape!: SVGElement; private mouthLine!: SVGElement;
   private neck!: SVGElement; private sterno!: SVGElement; private shirt!: SVGElement; private seams!: SVGElement;
-  private armShapes: { body: SVGElement; line: SVGElement }[] = [];
+  private armShapes: { body: SVGElement; line: SVGElement; side: number }[] = [];
   private micParts: SVGElement[] = []; private micDetail!: SVGElement; private micDot!: SVGElement;
 
   constructor(svg: SVGSVGElement | SVGGElement, opts: { x?: number; y?: number; scale?: number } = {}) {
@@ -233,7 +233,7 @@ export class DevRig {
         fill: "none", "stroke-width": 2, opacity: 0.3,
         d: `M${as * SH * 0.86},${chinY + 250} C${as * SH * 0.84},${chinY + 320} ${as * SH * 0.8},${chinY + 380} ${as * SH * 0.78},${BOT}`,
       }, body);
-      this.armShapes.push({ body: a, line: ln });
+      this.armShapes.push({ body: a, line: ln, side: as });
     }
 
     this.shirt = el("path", {
@@ -311,6 +311,16 @@ export class DevRig {
     const mg = el("g", { transform: `translate(0,${MOUTH_Y})` }, h);
     this.mouthShape = el("path", { filter: "url(#dvx-glow)" }, mg);
     this.mouthLine = el("path", { fill: "none", "stroke-width": 5, "stroke-linecap": "round", filter: "url(#dvx-glow)" }, mg);
+  }
+
+  /** Hide one resting arm, for when something else is drawing it: a gesture
+   *  needs the limb to bend at an elbow below the frame, which the static
+   *  shape cannot do. `side` is -1 for camera left. Default is both shown. */
+  showArm(side: number, visible: boolean) {
+    for (const a of this.armShapes) {
+      if (a.side !== side) continue;
+      for (const e of [a.body, a.line]) e.setAttribute("display", visible ? "inline" : "none");
+    }
   }
 
   /** `gl` 0..1 is "turned toward Glitch". */
