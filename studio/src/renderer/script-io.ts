@@ -100,6 +100,14 @@ export function installBridgeListeners() {
  *  ever requested: every preview still generated from scratch, and the cache
  *  looked like it was being wiped on restart when in fact it was never being
  *  read. */
+/** A short, stable label for the lesson a clip belongs to, from its path:
+ *  ".../Week 07/01 - VIEWs/Script.yml" -> "Week 07 / 01 - VIEWs". */
+export function lessonLabel(p?: string | null): string | undefined {
+  if (!p) return undefined;
+  const parts = p.split("/").filter(Boolean);
+  return parts.length >= 3 ? parts.slice(-3, -1).join(" / ") : undefined;
+}
+
 export function clonedTexts(script: Script): string[] {
   const cfg = getState().config;
   const cloned = Object.entries(cfg?.voices ?? {})
@@ -123,5 +131,8 @@ export function clonedTexts(script: Script): string[] {
 export function warmClonedVoice(script: Script) {
   const texts = clonedTexts(script);
   if (!texts.length) return;
-  window.studio.invoke("devvoice:warm", texts).catch(() => {});
+  window.studio.invoke("devvoice:warm", {
+    lesson: lessonLabel(getState().scriptPath), actor: "Dev",
+    items: texts.map((text) => ({ text })),
+  }).catch(() => {});
 }

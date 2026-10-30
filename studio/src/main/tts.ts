@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
+import os from "node:os";
 import { loadConfig } from "./config";
 import { currentSession } from "./session";
 import { broadcast } from "./index";
@@ -167,17 +168,38 @@ export function registerTtsIpc() {
   // Render ahead. The renderer hands over every line an actor will speak when
   // a script is opened, so by the time anyone presses record the cache is warm
   // and playback is a file read.
-  ipcMain.handle("devvoice:warm", async (_e, texts: string[]) => {
+  ipcMain.handle("devvoice:warm", async (_e, payload: string[] | { items: { text: string }[]; lesson?: string; actor?: string }) => {
     const { url } = loadConfig().devVoice;
+    const body = Array.isArray(payload) ? { texts: payload } : payload;
     try {
       const r = await fetch(url.replace(/\/$/, "") + "/warm", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ texts }),
+        body: JSON.stringify(body),
       });
       return r.ok ? await r.json() : { error: `${r.status}` };
     } catch (e: any) { return { error: e.message }; }
   });
   ipcMain.handle("devvoice:status", () => pollDevVoice());
+  /** Save a hand-performed take for one line.
+   *
+   *  The renderer can only capture WebM, and the service stores and serves
+   *  RIFF wavs, so the conversion happens here where ffmpeg already lives. */
+  ipcMain.handle("devvoice:override", async (_e, { text, webm }: { text: string; webm: number[] }) => {
+    const tmp = path.join(os.tmpdir(), `devvoice-${Date.now()}`);
+    const src = tmp + ".webm", dst = tmp + ".wav";
+    try {
+      fs.writeFileSync(src, Buffer.from(webm));
+      await new Promise<void>((res, rej) => execFile("ffmpeg", ["-y", "-i", src, "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", dst],
+        (err) => (err ? rej(new Error("ffmpeg could not convert the recording")) : res())));
+      const { url } = loadConfig().devVoice;
+      const r = await fetch(url.replace(/\/$/, "") + "/override", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, wav: fs.readFileSync(dst).toString("base64") }),
+      });
+      return r.ok ? await r.json() : { error: `${r.status}` };
+    } catch (e: any) { return { error: e.message }; }
+    finally { for (const f of [src, dst]) fs.rmSync(f, { force: true }); }
+  });
   /** How much of a script is already rendered, for the progress readout. */
   ipcMain.handle("devvoice:have", async (_e, texts: string[]) => {
     const { url } = loadConfig().devVoice;

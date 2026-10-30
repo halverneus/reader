@@ -18,8 +18,9 @@ lesson when it opens, and playback is then a file read.
 Deliberately stdlib-only apart from F5-TTS itself: it runs inside the
 devavatar venv, which is the only place torch is installed.
 """
-import argparse, hashlib, json, os, queue, re, sys, threading, time
+import argparse, base64, hashlib, json, os, queue, re, sqlite3, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs
 
 P = argparse.ArgumentParser()
 P.add_argument("--port", type=int, default=8899)
@@ -31,6 +32,66 @@ A = P.parse_args()
 os.makedirs(A.cache, exist_ok=True)
 
 STATE = {"state": "loading", "device": "?", "rendered": 0, "hits": 0, "overrides": 0}
+
+# ── the index ───────────────────────────────────────────────────────────────
+# The audio stays on disk. What a directory of hashed filenames cannot answer
+# is which lesson a clip belongs to, what its text was, or whether it was
+# performed by hand rather than generated, and those are exactly the questions
+# the management screen asks. So: blobs as files, metadata in sqlite, and this
+# process owns both. Node never touches the directory, which is what keeps a
+# single-writer database out of a two-language tug of war.
+DB = os.path.join(A.cache, "index.db")
+_db_lock = threading.Lock()
+
+def db():
+    c = sqlite3.connect(DB, check_same_thread=False)
+    c.execute("""CREATE TABLE IF NOT EXISTS clips(
+      key TEXT PRIMARY KEY, text TEXT NOT NULL, actor TEXT, lesson TEXT,
+      bytes INTEGER, seconds REAL, source TEXT NOT NULL DEFAULT 'generated',
+      created REAL NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS clips_lesson ON clips(lesson)")
+    return c
+
+def wav_seconds(path: str) -> float:
+    try:
+        import wave
+        with wave.open(path) as w: return round(w.getnframes() / float(w.getframerate()), 2)
+    except Exception: return 0.0
+
+def note(text: str, path: str, source: str, actor=None, lesson=None):
+    k = key(text)
+    with _db_lock, db() as c:
+        row = c.execute("SELECT actor, lesson FROM clips WHERE key=?", (k,)).fetchone()
+        # never blank out metadata a later call did not happen to carry
+        a = actor or (row[0] if row else None)
+        l = lesson or (row[1] if row else None)
+        c.execute("""INSERT INTO clips(key,text,actor,lesson,bytes,seconds,source,created)
+                     VALUES(?,?,?,?,?,?,?,?)
+                     ON CONFLICT(key) DO UPDATE SET text=excluded.text, actor=excluded.actor,
+                       lesson=excluded.lesson, bytes=excluded.bytes, seconds=excluded.seconds,
+                       source=excluded.source""",
+                  (k, norm(text), a, l, os.path.getsize(path), wav_seconds(path), source, time.time()))
+
+def reindex():
+    """Adopt whatever is already on disk. The cache predates the index, and a
+    clip whose row is missing would otherwise be invisible to the management
+    screen while still taking up space."""
+    known = set()
+    with _db_lock, db() as c:
+        for (k,) in c.execute("SELECT key FROM clips"): known.add(k)
+    found = 0
+    for f in os.listdir(A.cache):
+        if not f.endswith(".wav"): continue
+        k = f.split(".")[0]
+        if k in known: continue
+        p = os.path.join(A.cache, f)
+        src = "recorded" if ".override." in f else "generated"
+        with _db_lock, db() as c:
+            c.execute("""INSERT OR IGNORE INTO clips(key,text,actor,lesson,bytes,seconds,source,created)
+                         VALUES(?,?,?,?,?,?,?,?)""",
+                      (k, "", None, None, os.path.getsize(p), wav_seconds(p), src, os.path.getmtime(p)))
+        found += 1
+    if found: print(f"[devvoice] adopted {found} clip(s) already on disk", flush=True)
 _api = None
 _lock = threading.Lock()          # F5-TTS is not re-entrant; one at a time
 _q: "queue.Queue[str]" = queue.Queue()
@@ -97,16 +158,20 @@ def render(text: str) -> str:
         _api.infer(ref_file=A.ref_wav, ref_text=A.ref_text, gen_text=norm(text),
                    file_wave=tmp, remove_silence=True, seed=A.seed)
         os.replace(tmp, dst)
+        note(text, dst, "generated")
         STATE["rendered"] += 1
         print(f"[devvoice] {time.time()-t0:5.1f}s  {text[:56]!r}", flush=True)
     return dst
 
 def worker():
     while True:
-        text = _q.get()
+        job = _q.get()
+        text, actor, lesson = job if isinstance(job, tuple) else (job, None, None)
         try:
             if STATE["state"] == "ready":
-                render(text)
+                p = render(text)
+                try: note(text, p, "generated", actor, lesson)
+                except Exception: pass
         except Exception as e:
             print(f"[devvoice] warm failed: {e}", flush=True)
         finally:
@@ -122,6 +187,36 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/health"):
             return self._json(200, {**STATE, "queued": _q.qsize()})
+        if self.path.startswith("/list"):
+            q = parse_qs(urlparse(self.path).query)
+            where, args = [], []
+            if q.get("lesson"): where.append("lesson = ?"); args.append(q["lesson"][0])
+            if q.get("q"): where.append("text LIKE ?"); args.append("%" + q["q"][0] + "%")
+            sql = "SELECT key,text,actor,lesson,bytes,seconds,source,created FROM clips"
+            if where: sql += " WHERE " + " AND ".join(where)
+            sql += " ORDER BY lesson IS NULL, lesson, created DESC LIMIT ?"
+            args.append(int(q.get("limit", ["500"])[0]))
+            with _db_lock, db() as c: rows = c.execute(sql, args).fetchall()
+            cols = ["key", "text", "actor", "lesson", "bytes", "seconds", "source", "created"]
+            return self._json(200, {"clips": [dict(zip(cols, r)) for r in rows]})
+        if self.path.startswith("/stats"):
+            with _db_lock, db() as c:
+                total, by = c.execute("SELECT COUNT(*), COALESCE(SUM(bytes),0) FROM clips").fetchone()
+                lessons = c.execute("""SELECT COALESCE(lesson,'(unfiled)'), COUNT(*), COALESCE(SUM(bytes),0)
+                                       FROM clips GROUP BY 1 ORDER BY 3 DESC""").fetchall()
+                rec = c.execute("SELECT COUNT(*) FROM clips WHERE source='recorded'").fetchone()[0]
+            return self._json(200, {"clips": total, "bytes": by, "recorded": rec,
+                                    "lessons": [{"lesson": l, "clips": n, "bytes": b} for l, n, b in lessons]})
+        if self.path.startswith("/clip"):
+            k = (parse_qs(urlparse(self.path).query).get("key") or [""])[0]
+            for suffix in (".override.wav", ".wav"):
+                p = os.path.join(A.cache, k + suffix)
+                if os.path.exists(p):
+                    d = open(p, "rb").read()
+                    self.send_response(200); self.send_header("Content-Type", "audio/wav")
+                    self.send_header("Content-Length", str(len(d))); self.end_headers(); self.wfile.write(d)
+                    return
+            return self._json(404, {"error": "no such clip"})
         self._json(404, {"error": "not found"})
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -139,12 +234,24 @@ class H(BaseHTTPRequestHandler):
             return self._json(200, {"total": len(seen), "ready": done,
                                     "pending": len(seen) - done, "queued": _q.qsize()})
         if self.path.startswith("/warm"):
-            texts = [t for t in (body.get("texts") or []) if isinstance(t, str) and t.strip()]
+            items = body.get("items")
+            if not items:
+                items = [{"text": t} for t in (body.get("texts") or []) if isinstance(t, str)]
+            lesson, actor = body.get("lesson"), body.get("actor")
             queued = 0
-            for t in texts:
-                if ready(t) or t in _pending: continue
-                _pending.add(t); _q.put(t); queued += 1
-            return self._json(200, {"queued": queued, "already": len(texts) - queued})
+            for it in items:
+                t = (it.get("text") or "").strip()
+                if not t: continue
+                l, a = it.get("lesson") or lesson, it.get("actor") or actor
+                if ready(t):
+                    # already rendered, but the metadata may be new to us
+                    p = override_for(t) if os.path.exists(override_for(t)) else path_for(t)
+                    try: note(t, p, "recorded" if p.endswith(".override.wav") else "generated", a, l)
+                    except Exception: pass
+                    continue
+                if t in _pending: continue
+                _pending.add(t); _q.put((t, a, l)); queued += 1
+            return self._json(200, {"queued": queued, "already": len(items) - queued})
         if self.path.startswith("/speak"):
             text = (body.get("text") or "").strip()
             if not text: return self._json(400, {"error": "no text"})
@@ -155,8 +262,39 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type", "audio/wav")
             self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
             return
+        if self.path.startswith("/delete"):
+            keys = [k for k in (body.get("keys") or []) if isinstance(k, str)]
+            gone = 0
+            for k in keys:
+                for suffix in (".wav", ".override.wav"):
+                    p = os.path.join(A.cache, k + suffix)
+                    if os.path.exists(p): os.remove(p); gone += 1
+                with _db_lock, db() as c: c.execute("DELETE FROM clips WHERE key=?", (k,))
+            return self._json(200, {"deleted": gone})
+        if self.path.startswith("/override"):
+            # a take performed by hand, which from here on always wins
+            text = (body.get("text") or "").strip()
+            b64 = body.get("wav") or ""
+            if not text or not b64: return self._json(400, {"error": "need text and wav"})
+            try: raw = base64.b64decode(b64)
+            except Exception: return self._json(400, {"error": "bad base64"})
+            if raw[:4] != b"RIFF": return self._json(400, {"error": "not a RIFF wav"})
+            dst = override_for(text)
+            open(dst, "wb").write(raw)
+            note(text, dst, "recorded")
+            return self._json(200, {"ok": True, "key": key(text), "bytes": len(raw)})
+        if self.path.startswith("/unoverride"):
+            text = (body.get("text") or "").strip()
+            p = override_for(text)
+            if os.path.exists(p): os.remove(p)
+            gen = path_for(text)
+            if os.path.exists(gen): note(text, gen, "generated")
+            else:
+                with _db_lock, db() as c: c.execute("DELETE FROM clips WHERE key=?", (key(text),))
+            return self._json(200, {"ok": True})
         self._json(404, {"error": "not found"})
 
+reindex()
 threading.Thread(target=load, daemon=True).start()
 threading.Thread(target=worker, daemon=True).start()
 srv = ThreadingHTTPServer(("127.0.0.1", A.port), H)
