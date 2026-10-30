@@ -193,6 +193,8 @@ export class DevRig {
   private neck!: SVGElement; private sterno!: SVGElement; private shirt!: SVGElement; private seams!: SVGElement;
   private armShapes: { body: SVGElement; line: SVGElement; side: number }[] = [];
   private gLayer?: SVGElement;
+  private gFront?: SVGElement;
+  private micG!: SVGElement;
   private micParts: SVGElement[] = []; private micDetail!: SVGElement; private micDot!: SVGElement;
 
   constructor(svg: SVGSVGElement | SVGGElement, opts: { x?: number; y?: number; scale?: number } = {}) {
@@ -260,6 +262,7 @@ export class DevRig {
     // audience should be watching his face. Positioned off a matted frame
     // from Week 06 / 07, in the rig's own local units.
     const mic = el("g", { transform: `translate(${MIC.x},${MIC.y}) rotate(${MIC.rot})` }, body);
+    this.micG = mic;
     this.micParts = [];
     const mw = MIC.w;
     // A stub, not a boom. His real arm is dark and off frame, so a long bright
@@ -323,6 +326,17 @@ export class DevRig {
       this.shirt.parentNode!.insertBefore(this.gLayer, this.shirt);
     }
     return this.gLayer;
+  }
+
+  /** An empty group over the shirt but UNDER the mic, for the forearm and
+   *  hand. A hand is outside the tee but it still passes behind the
+   *  microphone, which is a physical object between him and the lens. */
+  gestureFrontLayer(): SVGElement {
+    if (!this.gFront) {
+      this.gFront = el("g");
+      this.micG.parentNode!.insertBefore(this.gFront, this.micG);
+    }
+    return this.gFront;
   }
 
   /** Hide one resting arm, for when something else is drawing it: a gesture
