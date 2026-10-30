@@ -82,7 +82,7 @@ class Production {
   private cancelSpeech() {
     for (const t of this.cueTimers) clearTimeout(t); this.cueTimers = [];
     if (this.audio) { this.audio.pause(); this.audio.src = ""; this.audio = null; }
-    glitch.setTalking(false);
+    glitch.setTalking(false); devatar.setToGlitch(false);
     this.set({ speakingId: null });
   }
 
@@ -264,11 +264,16 @@ class Production {
         // gaps: [startMs, endMs] silences inside the wav — post closes Glitch's mouth for them too
         const gaps = res.spans ? speechGaps(res.spans, dur) : [];
         this.log("line-start", { entryId: e.id, actor: e.actor, text, spoken: true, audio: res.path, duration: dur, ...(gaps.length ? { gaps } : {}) });
-        if (e.actor === "Glitch") glitch.setTalking(true); else if (e.actor === "Dev") devatar.setTalking(true);
+        // Devatar turns toward whoever is speaking to him. The post renderer
+        // works this out from the log; the live stage has to be told, or the
+        // preview shows him staring down the lens through Glitch's half of
+        // the conversation.
+        if (e.actor === "Glitch") { glitch.setTalking(true); devatar.setToGlitch(true); }
+        else if (e.actor === "Dev") devatar.setTalking(true);
         this.scheduleCues(e.text, dur, res.spans, e.actor === "Glitch");
       };
       a.onplaying = onStart;
-      a.onended = () => { onStart(); glitch.setTalking(false); devatar.setTalking(false); this.log("line-end", { entryId: e.id }); if (this.audio === a) { this.audio = null; this.set({ speakingId: null }); } resolve(); };
+      a.onended = () => { onStart(); glitch.setTalking(false); devatar.setTalking(false); devatar.setToGlitch(false); this.log("line-end", { entryId: e.id }); if (this.audio === a) { this.audio = null; this.set({ speakingId: null }); } resolve(); };
       a.onerror = () => { glitch.setTalking(false); resolve(); };
       a.onpause = () => { if (a.ended) return; resolve(); };
       a.play().then(onStart).catch(() => resolve());

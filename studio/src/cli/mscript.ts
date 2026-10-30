@@ -130,7 +130,11 @@ function main(argv: string[]) {
       else if (kind === "avatar") e = { ...base, type: "avatar", to: d.to === "real" ? "real" : "avatar", over: d.over };
       else if (kind === "outro") e = { ...base, type: "outro", next: d.next || undefined, thanks: d.thanks ?? undefined, phases: d.phases ?? undefined };
       else throw new Error("unknown kind " + kind);
-      const i = s.entries.findIndex((x) => x.start === marker && x.type === kind && (kind !== "line" || (x as any).actor === (e as any).actor));
+      // a marker can carry one face per character, so a face is identified by
+      // its actor as well: setting Dev's must not overwrite Glitch's
+      const i = s.entries.findIndex((x) => x.start === marker && x.type === kind
+        && (kind !== "line" || (x as any).actor === (e as any).actor)
+        && (kind !== "face" || ((x as any).actor ?? null) === ((e as any).actor ?? null)));
       if (i >= 0) s.entries[i] = e; else s.entries.push(e);
       if (!existing.length) closeGapBefore(s, marker);
       s.entries.sort((a, b) => a.start - b.start); save(file, s); console.log(`ok ${marker} ${brief(e)}`); break;
