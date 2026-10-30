@@ -59,7 +59,10 @@ export const DEFAULTS: Config = {
   audio: { denoise: true },
   courseFolders: { CS235: "MySQL" },
   courseThumbnails: {},
-  voices: { Glitch: "am_puck", Dev: "bf_alice" },
+  // Dev's voice went unused for a year because his lines were always read on
+  // camera; bf_alice is a British woman, which nobody noticed until the Script
+  // view grew a read button for him.
+  voices: { Glitch: "am_puck", Dev: "am_michael" },
   actorModes: { Dev: "skip", Glitch: "read" },
   anthropicApiKey: "",
   model: "claude-opus-5",

@@ -182,7 +182,7 @@ function Cell({ e }: { e: Entry }) {
         {e.type === "line" && <>
           <textarea class="ruled" value={e.text} rows={Math.max(1, e.text.split("\n").length)} onInput={(ev: any) => patch({ text: ev.currentTarget.value } as any)} placeholder="Dialogue. Inline cues like [curious] change Glitch's face mid-line." />
           <div class="meta">
-            {e.actor === "Glitch" && <SayButton text={e.text} actor="Glitch" />}
+            {(e.actor === "Glitch" || e.actor === "Dev") && <SayButton text={e.text} actor={e.actor} />}
             <select value={e.actor} onChange={(ev: any) => patch({ actor: ev.currentTarget.value } as any)}><option>Dev</option><option>Glitch</option></select>
             <select value={e.mood ?? ""} onChange={(ev: any) => patch({ mood: ev.currentTarget.value || undefined } as any)}><option value="">mood: (carry the last one)</option>{MOOD_NAMES.map((m) => <option value={m}>{m}</option>)}</select>
             {e.text.split("\n").some((l) => l.length > 70) && <span class="mono" style="color:var(--rose);font-size:11px">line &gt; 70 chars</span>}

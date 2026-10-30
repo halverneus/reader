@@ -88,7 +88,11 @@ class Production {
     this.log("marker", { marker });
     const evs = entriesAt(script, marker);
     const waits: Promise<void>[] = [];
-    const anyAuto = evs.some((e) => e.auto);
+    // Once avatar Dev is on screen nobody is reading on camera, so nothing is
+    // waiting on a human: every marker advances itself until the swap back.
+    // The `auto` flags in the script stay meaningful for the real-Dev stretch
+    // before it.
+    const anyAuto = evs.some((e) => e.auto) || this.st.avatar;
     let lineToSpeak: Entry | null = null;
 
     for (const e of evs) {
@@ -113,6 +117,9 @@ class Production {
         devatar.setMood("glitch");
         this.set({ avatar: e.to === "avatar" });
         this.log("avatar", { to: e.to, over });
+        // Let the dissolve finish before the next marker fires, or the first
+        // avatar beat lands while he is still half camera.
+        if (e.to === "avatar") waits.push(new Promise<void>((r) => this.cueTimers.push(window.setTimeout(r, over))));
       }
       else if (e.type === "slide") {
         if (e.actor === "Glitch") glitch.slide(e.to as any, e.over ?? 600);
@@ -138,7 +145,12 @@ class Production {
     if (lineToSpeak && lineToSpeak.type === "line") {
       const e = lineToSpeak;
       const cfg = getState().config;
-      const mode = cfg?.actorModes?.[e.actor] ?? (e.actor === "Glitch" ? "read" : "skip");
+      // Once the avatar is on, Dev's lines are machine-read whatever the
+      // actor mode says. That is the point of the swap, and it is also what
+      // makes auto-advance safe: a human-read line adds no wait, so without
+      // this the script would sprint past him the moment he was drawn.
+      const avatarDev = this.st.avatar && e.actor === "Dev";
+      const mode = avatarDev ? "read" : (cfg?.actorModes?.[e.actor] ?? (e.actor === "Glitch" ? "read" : "skip"));
       if (e.mood) { glitch.setMood(e.mood); this.log("mood", { mood: e.mood }); }
       if (mode === "read") {
         // block until running keys finish if the keys event ends at/before this marker (ported rule)
@@ -225,11 +237,11 @@ class Production {
         // gaps: [startMs, endMs] silences inside the wav — post closes Glitch's mouth for them too
         const gaps = res.spans ? speechGaps(res.spans, dur) : [];
         this.log("line-start", { entryId: e.id, actor: e.actor, text, spoken: true, audio: res.path, duration: dur, ...(gaps.length ? { gaps } : {}) });
-        if (e.actor === "Glitch") glitch.setTalking(true);
+        if (e.actor === "Glitch") glitch.setTalking(true); else if (e.actor === "Dev") devatar.setTalking(true);
         this.scheduleCues(e.text, dur, res.spans, e.actor === "Glitch");
       };
       a.onplaying = onStart;
-      a.onended = () => { onStart(); glitch.setTalking(false); this.log("line-end", { entryId: e.id }); if (this.audio === a) { this.audio = null; this.set({ speakingId: null }); } resolve(); };
+      a.onended = () => { onStart(); glitch.setTalking(false); devatar.setTalking(false); this.log("line-end", { entryId: e.id }); if (this.audio === a) { this.audio = null; this.set({ speakingId: null }); } resolve(); };
       a.onerror = () => { glitch.setTalking(false); resolve(); };
       a.onpause = () => { if (a.ended) return; resolve(); };
       a.play().then(onStart).catch(() => resolve());
