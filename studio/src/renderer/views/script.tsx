@@ -166,16 +166,39 @@ function Slot({ marker, entries, hot }: { marker: number; entries: Entry[]; hot?
   );
 }
 
+/** Markers the avatar is on screen for.
+ *
+ *  The engine forces auto-advance while avatar Dev is up, because nobody is
+ *  reading on camera and so nothing is waiting on a human. That is invisible
+ *  in the YAML, which made the script look like it still needed stepping
+ *  through by hand. Showing it here keeps the file honest. */
+function avatarMarkers(sc: { entries: Entry[] }): Set<number> {
+  const out = new Set<number>();
+  const sorted = [...sc.entries].sort((a, b) => a.start - b.start);
+  let on = false;
+  for (const e of sorted) {
+    if (on) out.add(e.start);
+    if (e.type === "avatar") { on = e.to === "avatar"; if (on) out.add(e.start); }
+  }
+  return out;
+}
+
 function Cell({ e }: { e: Entry }) {
   const patch = (p: Partial<Entry>) => updateScript((sc) => { const i = sc.entries.findIndex((x) => x.id === e.id); if (i >= 0) sc.entries[i] = { ...sc.entries[i], ...p } as Entry; });
   const remove = () => updateScript((sc) => { sc.entries = sc.entries.filter((x) => x.id !== e.id); });
   const chip = e.type === "line" ? e.actor : e.type;
   const keysRef = useRef<HTMLTextAreaElement>(null);
+  const { script } = useStore();
+  const implied = !e.auto && avatarMarkers(script).has(e.start);
   return (
     <div class="cell">
       <div class="who">
         <span class={"chip " + chip}>{chip}</span>
-        <label class="muted" style="font-size:11px"><input type="checkbox" checked={!!e.auto} onChange={(ev: any) => patch({ auto: ev.currentTarget.checked || undefined })} /> auto</label>
+        {implied
+          ? <label class="muted" style="font-size:11px;opacity:.75" title="Avatar Dev is on screen, so the engine advances this marker by itself. The checkbox in the file is not needed and is not used.">
+              <input type="checkbox" checked disabled /> auto <span class="mono" style="font-size:9px">(avatar)</span>
+            </label>
+          : <label class="muted" style="font-size:11px"><input type="checkbox" checked={!!e.auto} onChange={(ev: any) => patch({ auto: ev.currentTarget.checked || undefined })} /> auto</label>}
         <span class="muted mono" style="font-size:10px">→{e.end}</span>
       </div>
       <div>
