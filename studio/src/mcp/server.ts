@@ -56,7 +56,33 @@ function load(file: string): Script {
   if (errors.length) process.stderr.write(`[metrik-mcp] ${file}: ${errors.join("; ")}\n`);
   return script;
 }
+/** This process loaded its bundle once, at startup, and an MCP server lives
+ *  as long as the editor that spawned it -- days. A `script_set` from a build
+ *  that predates a new entry kind or a new field re-serializes the WHOLE file
+ *  through the serializer it was built with, and anything it does not know
+ *  about is gone on save, silently.
+ *
+ *  That is not a hypothesis. A server running since 23 October stripped every
+ *  `face actor: Dev` and the whole `avatar` entry out of a week seven script
+ *  on 30 October, and it was only found mid-recording.
+ *
+ *  So: writes are refused while this process is older than the bundle on
+ *  disk. Reads are untouched -- they are still useful, and still honest. */
+const BUNDLE = __filename;
+const LOADED_AT = (() => { try { return fs.statSync(BUNDLE).mtimeMs; } catch { return 0; } })();
+function assertCurrent(): void {
+  let now = 0;
+  try { now = fs.statSync(BUNDLE).mtimeMs; } catch { return; }
+  if (!LOADED_AT || now <= LOADED_AT) return;
+  throw new Error(
+    "This metrik MCP server is running an older build than the one installed " +
+    `(loaded ${new Date(LOADED_AT).toISOString()}, on disk ${new Date(now).toISOString()}). ` +
+    "Writing would re-serialize the script through the older code and silently drop anything it " +
+    "does not know about. Restart Claude Code to pick up the new server, or edit with the mscript CLI.");
+}
+
 function save(file: string, s: Script) {
+  assertCurrent();
   if (fs.existsSync(file)) fs.copyFileSync(file, file + ".bak");
   fs.writeFileSync(file, serializeScript(s));
 }
@@ -108,6 +134,7 @@ const liveNote = (src: Source) => src.live ? "(reading Studio's UNSAVED buffer, 
  */
 async function commit(file: string, src: Source, s: Script): Promise<string> {
   if (!src.live) { save(file, s); return pushed(file); }
+  assertCurrent();
   const r = await ask<{ ok: boolean; applied?: boolean; reason?: string }>("apply", { file, text: serializeScript(s), expectHash: src.hash });
   if (r?.applied) return "\n  · applied to Studio's UNSAVED buffer. Ctrl+Z undoes it, Ctrl+S keeps it.";
   throw new Error(`could not apply to Studio's buffer: ${r?.reason ?? "the window did not answer"}. Nothing was written.`);
@@ -378,6 +405,7 @@ tools.push({
     const target = secs[Number(slide) - 1];
     if (!target) throw new Error(`no slide ${slide} (deck has ${secs.length})`);
     fs.copyFileSync(b.slides, b.slides + ".bak");
+    assertCurrent();
     fs.writeFileSync(b.slides, removeSlide(html, Number(slide)));
     const after = checkDeck(dir);
     return `removed slide ${slide}: ${target.text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 80)}\n` + fmtFindings(after.findings, path.basename(dir));

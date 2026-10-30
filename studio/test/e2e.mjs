@@ -191,6 +191,32 @@ try {
     await new Promise((r) => one.on("close", r));
     ok(/"id":2/.test(seen), "a reply still in flight survives stdin closing", seen.slice(0, 200));
   }
+
+  // A server outlives the build it was started from -- an MCP process lives as
+  // long as the editor that spawned it. On 2026-10-30 one that had been up
+  // since the 23rd re-serialized a script through its own older code and
+  // silently dropped every `face actor: Dev` and the `avatar` entry with it.
+  // Writes must refuse once the bundle on disk is newer than the one running.
+  {
+    const bundle = path.join(STUDIO, "dist/cli/metrik-mcp.js");
+    const was = fs.statSync(bundle);
+    const scr = path.join(tmp, "stale.yml");
+    fs.writeFileSync(scr, 'script:\n  - type: line\n    actor: Dev\n    start: 100\n    end: 200\n    text: Greetings.\n');
+    const one = spawn("node", ["dist/cli/metrik-mcp.js"], { cwd: STUDIO, env, stdio: ["pipe", "pipe", "ignore"] });
+    let seen = "";
+    one.stdout.on("data", (d) => (seen += d));
+    const call = (id, data) => JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "script_set", arguments: { file: scr, marker: 100, kind: "face", data } } }) + "\n";
+    one.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "p", version: "0" } } }) + "\n" + call(2, { actor: "Dev", mood: "proud" }));
+    await sleep(1200);
+    ok(/face\(Dev\):proud/.test(seen), "a current server writes normally", seen.slice(0, 200));
+    try {
+      const future = Date.now() / 1000 + 5;
+      fs.utimesSync(bundle, future, future);
+      one.stdin.end(call(3, { actor: "Dev", mood: "humor" }));
+      await new Promise((r) => one.on("close", r));
+      ok(/older build than the one installed/.test(seen), "and refuses to write once the installed build is newer", seen.slice(-260));
+    } finally { fs.utimesSync(bundle, was.atime, was.mtime); }
+  }
 } finally {
   mcp.kill();
   app.kill("SIGTERM");
