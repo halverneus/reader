@@ -402,6 +402,9 @@ export class DevDriver {
   gl = 0; toGlitch = false;
   constructor(seed = 7) { this.g = new GlitchDriver(seed); }
   get mood() { return this.g.mood; }
+  /** The state as last ticked. Read-only; anything drawing alongside the rig
+   *  (a gesture layer, an overlay) needs the current mood colour. */
+  get cur(): DevState { return (this.g as any).cur as DevState; }
   setMood(m: string, hold?: number) { this.g.setMood(m, hold); }
   setTalking(v: boolean) { this.g.setTalking(v); }
   setToGlitch(v: boolean) { this.toGlitch = v; }
