@@ -6,7 +6,8 @@
 import { verbless, runup, checkText, COURSEWORK, errorsOf } from "../shared/check";
 import { Editor, replayText, SUSPICIOUS } from "../shared/wb";
 import { keyStatus } from "../shared/keys";
-import { parseScript, serializeScript, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
+import { parseScript, serializeScript, splitMoodTags, speechChunks, validate, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
+import { GESTURE_NAMES, gestureLength } from "../../glitch/dev-hands-data";
 import { markerDiff } from "../shared/diff";
 import { crossRepeats } from "../shared/across";
 import { MOODS, MOOD_NAMES } from "../../glitch/moods";
@@ -720,6 +721,49 @@ group("a botched keystroke count, and what is not one");
   ok(SUSPICIOUS.test("SELECT f(a);)"), "so is a paren the backspaces failed to eat");
   ok(SUSPICIOUS.test("SELECT f(a) ;"), "so is a space the cursor left behind the semicolon");
   ok(SUSPICIOUS.test("SELECT f(g(a))"), "so is an auto-closed paren nobody removed");
+}
+
+group("avatar Dev's hands");
+{
+  const line = (actor: string, text: string) => `script:
+- type: "line"
+  actor: "${actor}"
+  start: 100
+  end: 200
+  text: ${JSON.stringify(text)}
+`;
+  const t = splitMoodTags("[hand greeting] Greetings. [pause 300] I am Dev the Developer.");
+  ok(t.hands.length === 1 && t.hands[0].hand === "greeting", "[hand greeting] is lifted out as a gesture cue");
+  ok(!/hand|\[/.test(t.clean), "and it leaves no trace in the spoken text");
+  ok(t.hands[0].charIndex === 0, "a leading tag sits on the first character");
+  ok(speechChunks("[hand signoff] Do it!")[0].text === "Do it!", "the synthesiser never sees the tag");
+
+  const mid = splitMoodTags("Do not just watch it. [hand signoff] Do it!");
+  ok(mid.hands[0].charIndex === mid.clean.indexOf("Do it!"), "a mid-line tag lands on the word it sat on");
+
+  // the mood channel is untouched by the new tag
+  const both = splitMoodTags("[humor] Ha. [hand greeting] Hello.");
+  ok(both.cues.length === 1 && both.cues[0].mood === "humor", "moods and hands are separate channels");
+
+  ok(validate(parseScript(line("Dev", "[hand greeting] Hello.")).script).length === 0, "a known gesture on a Dev line is clean");
+  ok(validate(parseScript(line("Dev", "[hand waggle] Hello.")).script).some((x) => /unknown gesture/.test(x.msg)), "an invented gesture is flagged");
+  ok(validate(parseScript(line("Glitch", "[hand greeting] Hello.")).script).some((x) => /no hands/.test(x.msg)), "Glitch cannot gesture");
+
+  // a Dev face is the avatar's own; rebuilding the entry used to silently
+  // hand it to Glitch, which is a change nobody would see until the render
+  const f = parseScript(`script:
+- type: "face"
+  actor: "Dev"
+  start: 100
+  end: 200
+  mood: "humor"
+`).script;
+  ok((f.entries[0] as any).actor === "Dev", "a face can belong to Dev");
+  ok(/actor: Dev/.test(serializeScript(f)), "and it survives a save");
+
+  ok(GESTURE_NAMES.includes("greeting") && GESTURE_NAMES.includes("signoff"), "both of his standing moves are present");
+  ok(gestureLength("greeting") > 3 && gestureLength("signoff") > 3, "each runs long enough to cover its line");
+  ok(gestureLength("nope") === 0, "an unknown gesture has no length, so it never holds the arm up");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

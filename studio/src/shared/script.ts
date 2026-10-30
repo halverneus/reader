@@ -1,6 +1,7 @@
 // Script model shared by main, renderer, and the post pipeline.
 // YAML format is the existing Metrik Rule Script.yml, extended with moods, face/slide cues and mouse steps.
 import yaml from "js-yaml";
+import { GESTURE_NAMES } from "../../glitch/dev-hands-data";
 import { MOOD_NAMES } from "../../glitch/moods";
 
 export type Actor = "Dev" | "Glitch";
@@ -187,11 +188,13 @@ m:move 960,540 (glides) | m:move 50%,50% | m:jump 960,540 (instant) | m:click [l
 export interface TextSegment { mood?: string; pause?: number; text: string; offset: number }
 export interface PauseCue { ms: number; charIndex: number }
 export interface MoodCue { mood: string; charIndex: number; beforePause?: boolean }
-const TAG_RE = /\[pause(?:[\s:]+(\d+(?:\.\d+)?)\s*(ms|s)?)?\s*\]|\[([a-z]+)\]/g;
+/** [hand greeting] starts one of avatar Dev's arm moves at that word. */
+export interface HandCue { hand: string; charIndex: number }
+const TAG_RE = /\[pause(?:[\s:]+(\d+(?:\.\d+)?)\s*(ms|s)?)?\s*\]|\[([a-z]+)\]|\[hand[\s:]+([a-z_]+)\s*\]/g;
 export const DEFAULT_PAUSE_MS = 500;
-export function splitMoodTags(text: string): { clean: string; segments: TextSegment[]; cues: MoodCue[]; pauses: PauseCue[] } {
-  const cues: MoodCue[] = []; const pauses: PauseCue[] = [];
-  const marks: { at: number; mood?: string; pause?: number }[] = [];
+export function splitMoodTags(text: string): { clean: string; segments: TextSegment[]; cues: MoodCue[]; pauses: PauseCue[]; hands: HandCue[] } {
+  const cues: MoodCue[] = []; const pauses: PauseCue[] = []; const hands: HandCue[] = [];
+  const marks: { at: number; mood?: string; pause?: number; hand?: string }[] = [];
   // squeeze as we go (tags leave doubled spaces behind) so each tag's position stays true in the final text
   const squeeze = (t: string) => t.replace(/[ \t]{2,}/g, " ").replace(/ \n/g, "\n");
   let clean = ""; let last = 0; let m: RegExpExecArray | null;
@@ -200,13 +203,16 @@ export function splitMoodTags(text: string): { clean: string; segments: TextSegm
     if (m[3] && !MOOD_NAMES.includes(m[3])) continue;
     clean = squeeze(clean + text.slice(last, m.index));
     last = m.index + m[0].length;
-    marks.push(m[3] ? { at: clean.length, mood: m[3] } : { at: clean.length, pause: m[1] == null ? DEFAULT_PAUSE_MS : Math.round(parseFloat(m[1]) * (m[2] === "s" ? 1000 : 1)) });
+    marks.push(m[4] ? { at: clean.length, hand: m[4] }
+      : m[3] ? { at: clean.length, mood: m[3] }
+      : { at: clean.length, pause: m[1] == null ? DEFAULT_PAUSE_MS : Math.round(parseFloat(m[1]) * (m[2] === "s" ? 1000 : 1)) });
   }
   clean = squeeze(clean + text.slice(last));
   const lead = clean.length - clean.trimStart().length;
   clean = clean.trim();
   for (const k of marks) k.at = Math.max(0, Math.min(clean.length, k.at - lead));
   marks.forEach((k, i) => {
+    if (k.hand) { hands.push({ hand: k.hand, charIndex: k.at }); return; }
     if (k.pause != null) { pauses.push({ ms: k.pause, charIndex: k.at }); return; }
     // "[dismay] [pause]": the face changes as the silence begins, not after it
     const beforePause = marks.slice(i + 1).some((n) => n.pause != null && n.at === k.at);
@@ -214,8 +220,8 @@ export function splitMoodTags(text: string): { clean: string; segments: TextSegm
   });
   // segments for display: a new one at every tag
   const segments: TextSegment[] = [{ text: clean.slice(0, marks[0]?.at ?? clean.length), offset: 0 }];
-  marks.forEach((k, i) => segments.push({ mood: k.mood, pause: k.pause, text: clean.slice(k.at, marks[i + 1]?.at ?? clean.length), offset: k.at }));
-  return { clean, segments: segments.filter((sg, i) => i === 0 || sg.text.length || sg.mood || sg.pause), cues, pauses };
+  marks.forEach((k, i) => segments.push({ mood: k.mood ?? (k.hand && `hand ${k.hand}`), pause: k.pause, text: clean.slice(k.at, marks[i + 1]?.at ?? clean.length), offset: k.at }));
+  return { clean, segments: segments.filter((sg, i) => i === 0 || sg.text.length || sg.mood || sg.pause), cues, pauses, hands };
 }
 
 /** Text with tags removed, for Dev's prompter and logs. */
@@ -271,6 +277,10 @@ export function validate(s: Script): { entryId: string; msg: string }[] {
       if (e.actor !== "Dev" && e.actor !== "Glitch") out.push({ entryId: e.id, msg: `actor must be Dev or Glitch, got "${e.actor}"` });
       for (const l of e.text.split("\n")) if (l.length > 70) out.push({ entryId: e.id, msg: `line longer than 70 chars: "${l.slice(0, 30)}…"` });
       if (e.mood && !MOOD_NAMES.includes(e.mood)) out.push({ entryId: e.id, msg: `unknown mood "${e.mood}"` });
+      for (const h of splitMoodTags(e.text).hands) {
+        if (!GESTURE_NAMES.includes(h.hand)) out.push({ entryId: e.id, msg: `unknown gesture "[hand ${h.hand}]" (have: ${GESTURE_NAMES.join(", ")})` });
+        else if (e.actor !== "Dev") out.push({ entryId: e.id, msg: `"[hand ${h.hand}]" is avatar Dev's arm; Glitch has no hands` });
+      }
     }
     if (e.type === "face" && !MOOD_NAMES.includes(e.mood)) out.push({ entryId: e.id, msg: `unknown mood "${e.mood}"` });
     if (e.type === "outro") for (const p of outroPhases(e)) { if (p.mood && !MOOD_NAMES.includes(p.mood)) out.push({ entryId: e.id, msg: `outro ${p.phase}: unknown mood "${p.mood}"` }); for (const l of (p.text ?? "").split("\n")) if (l.length > 70) out.push({ entryId: e.id, msg: `outro ${p.phase}: line longer than 70 chars` }); }

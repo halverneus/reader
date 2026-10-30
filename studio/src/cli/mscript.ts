@@ -29,10 +29,10 @@ kinds and their json fields:
   line     {"actor":"Dev|Glitch","text":"…","mood":"curious"?,"auto":true?}
   editor   {"text":"…"}
   keys     {"keystrokes":["k:ctrl+a","t:code","m:click"],"speed":1-10?}
-  face     {"mood":"malice","delay":2000?,"hold":800?}   delay = wait before the face changes; hold = revert after
+  face     {"mood":"malice","actor":"Dev"?,"delay":2000?,"hold":800?}   delay = wait before the face changes; hold = revert after; actor Dev is avatar Dev's own face, otherwise Glitch's
   slide    {"actor":"Dev|Glitch","to":"left|right|top|bottom|hide|show","over":600?}
   outro    {"next":"Dictionaries","thanks":["Nicole"],"phases":[{"phase":"next","text":"…","mood":"deception"}]?}
-Inline [mood] tags inside any text switch Glitch's face mid-line. [pause 500] (ms; [pause] = 500) is a real silence in the voice (Kokoro ignores "..." and commas); Glitch's mouth stops for it. Lines ≤ 70 chars. Every text line must be speakable.
+Inline [mood] tags inside any text switch Glitch's face mid-line. [pause 500] (ms; [pause] = 500) is a real silence in the voice (Kokoro ignores "..." and commas); Glitch's mouth stops for it. Lines ≤ 70 chars. Every text line must be speakable. [hand greeting] / [hand signoff] inside a DEV line starts avatar Dev's arm at that word: the palm-forward hello into the hand on his chest, and the point down the lens for the sign-off.
 "end" defaults to the next marker (or start+100); pass "end" in the json to override.`;
 
 const TEMPLATE = (title: string) => `script:
@@ -84,7 +84,7 @@ const TEMPLATE = (title: string) => `script:
 
 function load(file: string): Script { const { script, errors } = parseScript(fs.readFileSync(file, "utf8")); if (errors.length) console.error("warnings:", errors.join("; ")); return script; }
 function save(file: string, s: Script) { if (fs.existsSync(file)) fs.copyFileSync(file, file + ".bak"); fs.writeFileSync(file, serializeScript(s)); }
-const brief = (e: Entry) => e.type === "line" ? `${e.actor}${e.mood ? `[${e.mood}]` : ""}: ${cleanText(e.text).replace(/\n/g, " ").slice(0, 70)}` : e.type === "editor" ? `note: ${e.text.replace(/\n/g, " ").slice(0, 50)}` : e.type === "keys" ? `keys(${e.keystrokes.length})` : e.type === "face" ? `face:${e.mood}` : e.type === "slide" ? `slide:${e.actor}→${e.to}` : e.type === "avatar" ? `avatar→${e.to}` : `outro(next: ${e.next ?? "-"}; thanks: ${(e.thanks ?? []).join(", ") || "-"})`;
+const brief = (e: Entry) => e.type === "line" ? `${e.actor}${e.mood ? `[${e.mood}]` : ""}: ${cleanText(e.text).replace(/\n/g, " ").slice(0, 70)}` : e.type === "editor" ? `note: ${e.text.replace(/\n/g, " ").slice(0, 50)}` : e.type === "keys" ? `keys(${e.keystrokes.length})` : e.type === "face" ? `face${e.actor === "Dev" ? "(Dev)" : ""}:${e.mood}` : e.type === "slide" ? `slide:${e.actor}→${e.to}` : e.type === "avatar" ? `avatar→${e.to}` : `outro(next: ${e.next ?? "-"}; thanks: ${(e.thanks ?? []).join(", ") || "-"})`;
 const readJson = (arg: string | undefined) => JSON.parse(!arg || arg === "-" ? fs.readFileSync(0, "utf8") : arg);
 
 function main(argv: string[]) {
@@ -124,7 +124,7 @@ function main(argv: string[]) {
       if (kind === "line") e = { ...base, type: "line", actor: d.actor === "Glitch" ? "Glitch" : "Dev", text: wrap70(String(d.text ?? "").trim()), mood: d.mood || undefined };
       else if (kind === "editor") e = { ...base, type: "editor", text: String(d.text ?? "").trim() };
       else if (kind === "keys") e = { ...base, type: "keys", keystrokes: d.keystrokes ?? [], speed: d.speed };
-      else if (kind === "face") e = { ...base, type: "face", mood: d.mood ?? "neutral", hold: d.hold, delay: d.delay };
+      else if (kind === "face") e = { ...base, type: "face", actor: d.actor === "Dev" ? "Dev" : undefined, mood: d.mood ?? "neutral", hold: d.hold, delay: d.delay };
       else if (kind === "slide") e = { ...base, type: "slide", actor: d.actor === "Glitch" ? "Glitch" : "Dev", to: d.to ?? "left", over: d.over };
       else if (kind === "outro") e = { ...base, type: "outro", next: d.next || undefined, thanks: d.thanks ?? undefined, phases: d.phases ?? undefined };
       else throw new Error("unknown kind " + kind);

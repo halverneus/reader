@@ -18,6 +18,7 @@ requestAnimationFrame(loop);
   mood: (m: string, hold?: number) => driver.setMood(m, hold),
   talk: (v: boolean) => driver.setTalking(v),
   toGlitch: (v: boolean) => driver.setToGlitch(v),
+  gesture: (n: string | null) => driver.playGesture(n),
   step: (fps = 30, frame = 0) => { manual = true; rig.update(driver.tick(1 / fps), frame / fps, driver.gl); },
   frame: (): Promise<string> => new Promise((resolve, reject) => {
     const W = 1920, H = 1080;

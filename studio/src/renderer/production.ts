@@ -199,14 +199,19 @@ class Production {
   /** Inline mood cues (and, for Glitch, the mouth closing over [pause]s) timed against the spoken spans. Without
    *  spans (Dev reads on camera) the line is estimated at ~14 chars/sec, with its pauses added in. */
   private scheduleCues(text: string, durationMs: number, spans?: SpeechSpan[], talking = false) {
-    const { clean, cues, pauses } = splitMoodTags(text);
+    const { clean, cues, pauses, hands } = splitMoodTags(text);
+    // avatar Dev's arm. Logged either way, so a line recorded before the swap
+    // still carries its gesture into the render.
+    const gesture = (name: string) => { devatar.playGesture(name); this.log("gesture", { actor: "Dev", name }); };
     if (!spans) {
       const pauseMs = pauses.reduce((n, p) => n + p.ms, 0), perChar = Math.max(0, durationMs - pauseMs) / Math.max(1, clean.length);
       const at = (i: number, before = false) => i * perChar + pauses.filter((p) => p.charIndex < i || (!before && p.charIndex === i)).reduce((n, p) => n + p.ms, 0);
       for (const c of cues) this.cueTimers.push(window.setTimeout(() => { glitch.setMood(c.mood); this.log("mood", { mood: c.mood }); }, at(c.charIndex, c.beforePause)));
+      for (const h of hands) this.cueTimers.push(window.setTimeout(() => gesture(h.hand), at(h.charIndex)));
       return;
     }
     for (const c of cues) this.cueTimers.push(window.setTimeout(() => { glitch.setMood(c.mood); this.log("mood", { mood: c.mood }); }, timeAtChar(spans!, c.charIndex, c.beforePause)));
+    for (const h of hands) this.cueTimers.push(window.setTimeout(() => gesture(h.hand), timeAtChar(spans!, h.charIndex)));
     if (talking) for (const [a, b] of speechGaps(spans, durationMs)) {
       this.cueTimers.push(window.setTimeout(() => glitch.setTalking(false), a));
       if (b < durationMs) this.cueTimers.push(window.setTimeout(() => { if (this.audio) glitch.setTalking(true); }, b));

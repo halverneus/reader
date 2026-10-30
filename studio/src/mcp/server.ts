@@ -118,7 +118,7 @@ const brief = (e: Entry): string =>
   e.type === "line" ? `${(e as any).actor}${(e as any).mood ? `[${(e as any).mood}]` : ""}: ${cleanText((e as any).text).replace(/\n/g, " ").slice(0, 70)}`
   : e.type === "editor" ? `note: ${(e as any).text.replace(/\n/g, " ").slice(0, 50)}`
   : e.type === "keys" ? `keys(${(e as any).keystrokes.length})`
-  : e.type === "face" ? `face:${(e as any).mood}`
+  : e.type === "face" ? `face${(e as any).actor === "Dev" ? "(Dev)" : ""}:${(e as any).mood}`
   : e.type === "slide" ? `slide:${(e as any).actor}->${(e as any).to}`
   : `outro(next: ${(e as any).next ?? "-"})`;
 
@@ -277,7 +277,7 @@ tools.push({
     if (kind === "line") e = { ...base, type: "line", actor: d.actor === "Glitch" ? "Glitch" : "Dev", text: wrap70(String(d.text ?? "").trim()), mood: d.mood || undefined };
     else if (kind === "editor") e = { ...base, type: "editor", text: String(d.text ?? "").trim() };
     else if (kind === "keys") e = { ...base, type: "keys", keystrokes: d.keystrokes ?? [], speed: d.speed };
-    else if (kind === "face") e = { ...base, type: "face", mood: d.mood ?? "neutral", hold: d.hold, delay: d.delay };
+    else if (kind === "face") e = { ...base, type: "face", actor: d.actor === "Dev" ? "Dev" : undefined, mood: d.mood ?? "neutral", hold: d.hold, delay: d.delay };
     else if (kind === "slide") e = { ...base, type: "slide", actor: d.actor === "Glitch" ? "Glitch" : "Dev", to: d.to ?? "left", over: d.over };
     else if (kind === "outro") e = { ...base, type: "outro", next: d.next || undefined, thanks: d.thanks ?? undefined, phases: d.phases ?? undefined };
     else throw new Error("unknown kind " + kind);

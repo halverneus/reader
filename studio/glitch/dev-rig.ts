@@ -16,6 +16,7 @@
 // a puppet, so every expression rotates the head alone, about a pivot at the
 // mouth: a turn about a low point swings the crown and barely moves the chin,
 // which is what keeps the jaw sitting in the collar.
+import { DevHands, gestureLength } from "./dev-hands";
 import { BASE, Expr, hexToRgb, moodExpr } from "./moods";
 import { GlitchDriver } from "./vex";
 
@@ -27,7 +28,9 @@ const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(",")})`;
 const mix = (c: number[], t: number[], k: number) => c.map((v, i) => lerp(v, t[i], k));
 /** sRGB-ish lift toward a target, for the one or two colors picked by eye. */
 
-export interface DevState extends Expr { rgb: [number, number, number]; blink: number; talkOpen: number }
+/** `gesture` is the arm: which move is running and how far into it, in
+ *  seconds. Absent means the arm is at rest and the rig draws its own. */
+export interface DevState extends Expr { rgb: [number, number, number]; blink: number; talkOpen: number; gesture?: { name: string; t: number } }
 
 // ── his proportions, from the fit. Ratios, not guesses. ─────────────────────
 const H = 250;                                   // brow top to chin
@@ -194,6 +197,7 @@ export class DevRig {
   private armShapes: { body: SVGElement; line: SVGElement; side: number }[] = [];
   private gLayer?: SVGElement;
   private gFront?: SVGElement;
+  private hands?: DevHands;
   private micG!: SVGElement;
   private micParts: SVGElement[] = []; private micDetail!: SVGElement; private micDot!: SVGElement;
 
@@ -408,6 +412,10 @@ export class DevRig {
       this.inner.setAttribute("filter", on ? "url(#dvx-static)" : "");
       this.inner.setAttribute("opacity", on ? String(0.75 + Math.random() * 0.25) : "1");
     } else { this.inner.removeAttribute("filter"); this.inner.setAttribute("opacity", "1"); }
+
+    // the arm, built the first time a gesture asks for it and kept after, so
+    // a script that never gestures carries none of it
+    if (s.gesture || this.hands) (this.hands ??= new DevHands(this)).update(s.gesture ?? null, s);
   }
 }
 
@@ -436,7 +444,11 @@ function defs(svg: SVGSVGElement) {
 export class DevDriver {
   private g: GlitchDriver;
   gl = 0; toGlitch = false;
+  private gname: string | null = null; private gt = 0;
   constructor(seed = 7) { this.g = new GlitchDriver(seed); }
+  /** Start a hand gesture. It runs on its own clock from here and puts the
+   *  arm away by itself, so nothing has to remember to stop it. */
+  playGesture(name: string | null) { this.gname = name; this.gt = 0; }
   get mood() { return this.g.mood; }
   /** The state as last ticked. Read-only; anything drawing alongside the rig
    *  (a gesture layer, an overlay) needs the current mood colour. */
@@ -447,6 +459,11 @@ export class DevDriver {
   tick(dt: number): DevState {
     const s = this.g.tick(dt) as unknown as DevState;
     this.gl = lerp(this.gl, this.toGlitch ? 1 : 0, 1 - Math.pow(0.004, dt));
+    if (this.gname) {
+      this.gt += dt;
+      if (this.gt > gestureLength(this.gname)) this.gname = null;
+      else s.gesture = { name: this.gname, t: this.gt };
+    }
     return s;
   }
 }

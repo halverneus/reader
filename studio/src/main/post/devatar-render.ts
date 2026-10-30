@@ -9,6 +9,8 @@
 //   * gaze   — he turns toward Glitch whenever Glitch is speaking, which is
 //              the behaviour you want often enough that authoring it per line
 //              would just be noise
+//   * hands  — `[hand greeting]` / `[hand signoff]` inside a Dev line, logged
+//              at the word it sat on
 import { BrowserWindow } from "electron";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -32,16 +34,17 @@ export async function renderDevatar(dir: string, session: any, log: Log): Promis
   const total = Math.ceil(durationS * fps);
   const cfg = loadConfig();
 
-  type Cue = { t: number; mood?: string; hold?: number; talk?: boolean; toGlitch?: boolean };
+  type Cue = { t: number; mood?: string; hold?: number; talk?: boolean; toGlitch?: boolean; gesture?: string | null };
   const cues: Cue[] = [];
   for (const e of session.events) {
     const t = (e.t - t0) / 1000;
     if (e.kind === "mood" && e.actor === "Dev") cues.push({ t, mood: e.mood, hold: e.hold });
+    else if (e.kind === "gesture" && e.actor === "Dev") cues.push({ t, gesture: e.name });
     // the handover wears the glitch mood: it is something being done TO him
     else if (e.kind === "avatar") cues.push({ t, mood: "glitch" });
     else if (e.kind === "line-start" && e.actor === "Glitch") cues.push({ t, toGlitch: true });
     else if (e.kind === "line-end" && e.actor === "Glitch") cues.push({ t, toGlitch: false });
-    else if (e.kind === "reset") cues.push({ t, mood: "neutral", toGlitch: false, talk: false });
+    else if (e.kind === "reset") cues.push({ t, mood: "neutral", toGlitch: false, talk: false, gesture: null });
   }
   // the mouth, from the mic rather than from the script
   const micRaw: string | undefined = [session.meta.files?.mic, path.join(dir, "mic.flac")].find((f: string) => f && fs.existsSync(f));
@@ -74,6 +77,7 @@ export async function renderDevatar(dir: string, session: any, log: Log): Promis
           c.mood ? `devatar.mood(${JSON.stringify(c.mood)}, ${c.hold ?? 0});` : "",
           c.talk != null ? `devatar.talk(${c.talk});` : "",
           c.toGlitch != null ? `devatar.toGlitch(${c.toGlitch});` : "",
+          c.gesture !== undefined ? `devatar.gesture(${c.gesture ? JSON.stringify(c.gesture) : "null"});` : "",
         ].join("");
         if (js) await win.webContents.executeJavaScript(js);
       }
