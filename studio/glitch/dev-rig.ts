@@ -114,6 +114,12 @@ const EAR_FOLD = "M5,-21 C15,-18 17,-3 12,9 C9,17 5,21 1,23";
 // shoulders: deltoid-led, widest at the cap, tapering to the waist
 const SH = hw * 2.62, BOT = chinY + 430;
 const NT = jw * 0.74, NB = jw * 1.02;
+/** His boom mic, measured off a matted frame and converted into rig units.
+ *  Mount at the upper right, grille down near his chest: 224 units long at
+ *  58 degrees, which is a CLOCKWISE rotation in SVG. Getting that sign wrong
+ *  points it off his shoulder into the air. Taken by fitting the long axis
+ *  of the mic's own blob in the matted frame, not read off a screenshot. */
+const MIC = { x: 242, y: 197, rot: 58.3, w: 91 };
 const ARM_TOP_X = SH * 0.88 + Math.sin((25 * Math.PI) / 180) * NOSE_H;
 const ARM_TOP_Y = chinY + 70 + Math.cos((25 * Math.PI) / 180) * NOSE_H;
 
@@ -186,6 +192,7 @@ export class DevRig {
   private mouthShape!: SVGElement; private mouthLine!: SVGElement;
   private neck!: SVGElement; private sterno!: SVGElement; private shirt!: SVGElement; private seams!: SVGElement;
   private armShapes: { body: SVGElement; line: SVGElement }[] = [];
+  private micParts: SVGElement[] = []; private micDetail!: SVGElement; private micDot!: SVGElement;
 
   constructor(svg: SVGSVGElement | SVGGElement, opts: { x?: number; y?: number; scale?: number } = {}) {
     if (svg.tagName.toLowerCase() === "svg") svg.setAttribute("viewBox", `0 0 ${DEV_LAYOUT.W} ${DEV_LAYOUT.H}`);
@@ -246,6 +253,32 @@ export class DevRig {
          ` M${SH * 1.05},${chinY + 212} L${SH * 0.6},${chinY + 168}`,
     }, body);
 
+    // ── the boom mic ───────────────────────────────────────────────────────
+    // It is in frame in every real shot, so without one here it would vanish
+    // mid-dissolve: a conspicuous thing disappearing at the exact moment the
+    // audience should be watching his face. Positioned off a matted frame
+    // from Week 06 / 07, in the rig's own local units.
+    const mic = el("g", { transform: `translate(${MIC.x},${MIC.y}) rotate(${MIC.rot})` }, body);
+    this.micParts = [];
+    const mw = MIC.w;
+    // A stub, not a boom. His real arm is dark and off frame, so a long bright
+    // diagonal here is the one thing in the drawing with no counterpart in the
+    // shot, and the eye goes straight to it during the dissolve.
+    this.micParts.push(el("rect", { x: -mw * 0.1, y: -52, width: mw * 0.2, height: 64, rx: mw * 0.09, "stroke-width": 2.5 }, mic));
+    // shock-mount yoke
+    this.micParts.push(el("rect", { x: -mw * 0.3, y: -22, width: mw * 0.6, height: 34, rx: 7, "stroke-width": 2.5 }, mic));
+    // body
+    this.micParts.push(el("rect", { x: -mw / 2, y: 6, width: mw, height: 144, rx: mw * 0.16, "stroke-width": 3 }, mic));
+    // grille
+    this.micParts.push(el("rect", { x: -mw * 0.48, y: 150, width: mw * 0.96, height: 82, rx: mw * 0.3, "stroke-width": 3 }, mic));
+    // the few details that make it read as a condenser and not a baton
+    this.micDetail = el("path", {
+      fill: "none", "stroke-width": 2.2, opacity: 0.5,
+      d: `M${-mw * 0.4},172 L${mw * 0.4},172 M${-mw * 0.44},196 L${mw * 0.44},196 M${-mw * 0.4},220 L${mw * 0.4},220` +
+         ` M${-mw / 2},50 L${mw / 2},50 M${-mw / 2},128 L${mw / 2},128`,
+    }, mic);
+    this.micDot = el("circle", { cx: 0, cy: 92, r: mw * 0.055 }, mic);
+
     // ── head, in its own group so the body can stay still ─────────────────
     h = this.headG = el("g", {}, this.inner);
     const earY = (NOSE_TIP - EYE_LINE) * 0.3;
@@ -298,6 +331,9 @@ export class DevRig {
     this.shirt.setAttribute("fill", rgb(mix([19, 24, 34], s.rgb, 0.16))); this.shirt.setAttribute("stroke", c);
     this.seams.setAttribute("stroke", c);
     for (const a of this.armShapes) { a.body.setAttribute("fill", faceCol); a.body.setAttribute("stroke", c); a.line.setAttribute("stroke", c); }
+    for (const m of this.micParts) { m.setAttribute("fill", rgb(mix([19, 24, 34], s.rgb, 0.10))); m.setAttribute("stroke", c); }
+    this.micDetail.setAttribute("stroke", c);
+    this.micDot.setAttribute("fill", c);
 
     const nb = NOSE_TIP - EYE_LINE, nw = NOSE_W / 2;
     this.nose.setAttribute("d",
