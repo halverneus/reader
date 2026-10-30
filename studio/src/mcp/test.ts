@@ -477,6 +477,60 @@ group("a diff reports field changes, not only text");
   ok(d.changed.join() === "200", "a mood-only change is a change");
 }
 
+group("swapping real Dev for the drawn one");
+{
+  const scr = (...swaps: string[]) => `script:
+- type: "editor"
+  start: 100
+  end: 200
+  text: "Roll Intro"
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "The inner query runs first and hands its answer up."
+${swaps.join("\n")}`;
+  const sw = (start: number, to: string, extra = "") => `- type: "avatar"
+  start: ${start}
+  end: ${start + 100}
+  to: "${to}"${extra ? "\n" + extra : ""}`;
+  const avatar = (t: string) => checkText(t).filter((x) => x.rule === "avatar");
+
+  // the round trip survives a save
+  const rt = parseScript(scr(sw(300, "avatar", "  over: 1500"))).script;
+  const back = parseScript(serializeScript(rt)).script;
+  const e = back.entries.find((x) => x.type === "avatar") as any;
+  ok(e && e.to === "avatar" && e.over === 1500, "an avatar swap round-trips through save and load");
+
+  ok(avatar(scr(sw(300, "avatar"), sw(400, "real"))).length === 0, "on then off is clean");
+  ok(avatar(scr(sw(300, "avatar"), sw(400, "avatar"))).some((x) => /already on/.test(x.msg)), "switching the avatar on twice is flagged");
+  ok(avatar(scr(sw(300, "real"))).some((x) => /never switched in/.test(x.msg)), "returning to camera without a swap is flagged");
+
+  // a hand-written Dev face on the swap marker loses to the renderer
+  const clash = scr(sw(300, "avatar")) + `
+- type: "face"
+  actor: "Dev"
+  start: 300
+  end: 400
+  mood: "curious"`;
+  ok(avatar(clash).some((x) => /overwritten/.test(x.msg)), "a Dev face on the swap marker is flagged as overwritten");
+
+  // Dev faces are a separate channel from the moods that cue Glitch
+  const two = parseScript(`script:
+- type: "face"
+  start: 100
+  end: 200
+  mood: "curious"
+- type: "face"
+  actor: "Dev"
+  start: 100
+  end: 200
+  mood: "smug"`).script;
+  const faces = two.entries.filter((x) => x.type === "face") as any[];
+  ok(faces.length === 2 && faces.filter((f) => f.actor === "Dev").length === 1 && faces.filter((f) => !f.actor).length === 1,
+     "a Dev face and a Glitch face coexist on one marker");
+}
+
 group("a face either flinches or it settles");
 {
   const face = (mood: string, hold: number | null) => `script:

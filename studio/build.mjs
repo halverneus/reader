@@ -12,6 +12,7 @@ const jobs = [
   { ...common, entryPoints: ["src/mcp/server.ts"], platform: "node", format: "cjs", outfile: "dist/cli/metrik-mcp.js", banner: { js: "#!/usr/bin/env node" } },
   { ...common, entryPoints: ["src/mcp/test.ts"], platform: "node", format: "cjs", outfile: "dist/cli/metrik-test.js", banner: { js: "#!/usr/bin/env node" } },
   { ...common, entryPoints: ["src/renderer/outro-page.ts"], platform: "browser", format: "iife", outfile: "dist/renderer/outro-page.js" },
+  { ...common, entryPoints: ["src/renderer/devatar-page.ts"], platform: "browser", format: "iife", outfile: "dist/renderer/devatar-page.js" },
 ];
 cpSync("src/renderer/static", "dist/renderer", { recursive: true });
 if (watch) { for (const j of jobs) (await context(j)).watch(); }

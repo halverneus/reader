@@ -313,6 +313,22 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
       err("caps", `Glitch says ${caps.map((c) => `"${c}"`).join(", ")} in capitals; the voice spells those out. Write them quoted and lowercase, as ${caps.map((c) => `"${c.toLowerCase()}"`).join(", ")}`, e);
   }
 
+  // ── the avatar swap
+  // A swap only means anything if something swaps back, and the "glitch" mood
+  // it wears is applied by the renderer, not by the author, so a hand-written
+  // mood on the same marker fights it.
+  {
+    const sw = s.entries.filter((e) => e.type === "avatar") as any[];
+    let on = false;
+    for (const e of sw) {
+      if (e.to === "avatar" && on) err("avatar", `avatar swap at ${e.start} turns the avatar on when it is already on`, e);
+      if (e.to === "real" && !on) err("avatar", `avatar swap at ${e.start} returns to the real camera, but the avatar was never switched in`, e);
+      on = e.to === "avatar";
+      const clash = s.entries.find((o) => o.type === "face" && (o as any).actor === "Dev" && o.start === e.start);
+      if (clash) adv("avatar", `the swap at ${e.start} already puts avatar Dev into the glitch mood; the Dev face on the same marker will be overwritten`, e);
+    }
+  }
+
   // ── a face that un-plays itself
   // `hold` reverts to the face showing when the cue fired. That is right for a
   // flinch and wrong for everything else: the reaction plays, then snaps back

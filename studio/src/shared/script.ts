@@ -15,13 +15,19 @@ export interface BaseEntry {
 export interface LineEntry extends BaseEntry { type: "line"; actor: string; text: string; mood?: string }
 export interface EditorEntry extends BaseEntry { type: "editor"; text: string }
 export interface KeysEntry extends BaseEntry { type: "keys"; keystrokes: string[]; speed?: number }
-export interface FaceEntry extends BaseEntry { type: "face"; mood: string; hold?: number; delay?: number }
+/** A mood cue. `actor` defaults to Glitch; "Dev" drives the avatar instead,
+ *  which is a separate channel on purpose: a `mood:` on a Dev LINE has always
+ *  cued Glitch's reaction to what Dev is saying, and that still holds. */
+export interface FaceEntry extends BaseEntry { type: "face"; actor?: Actor; mood: string; hold?: number; delay?: number }
+/** Swap between the real camera and the drawn avatar. The cross-fade happens
+ *  on the timeline; the avatar wears the "glitch" mood across it. */
+export interface AvatarEntry extends BaseEntry { type: "avatar"; to: "avatar" | "real"; over?: number }
 export interface SlideEntry extends BaseEntry { type: "slide"; actor: Actor; to: SlideTarget; over?: number }
 export type OutroPhaseName = "thanks" | "credits" | "next" | "subscribe";
 export interface OutroPhase { phase: OutroPhaseName; text?: string; mood?: string; title?: string; subtitle?: string }
 /** Branded closing sequence. Glitch reads each phase's text; the animation waits for him. */
 export interface OutroEntry extends BaseEntry { type: "outro"; next?: string; thanks?: string[]; phases?: OutroPhase[] }
-export type Entry = LineEntry | EditorEntry | KeysEntry | FaceEntry | SlideEntry | OutroEntry;
+export type Entry = LineEntry | EditorEntry | KeysEntry | FaceEntry | SlideEntry | OutroEntry | AvatarEntry;
 export type EntryType = Entry["type"];
 
 export interface Script { entries: Entry[]; actors: string[] }
@@ -65,7 +71,8 @@ export function parseScript(input: string): { script: Script; errors: string[] }
       }
       case "editor": entries.push({ ...base, type: "editor", text: String(r.text ?? "").trim() }); break;
       case "keys": entries.push({ ...base, type: "keys", keystrokes: (r.keystrokes ?? []).map((s: any) => String(s)), speed: r.speed != null ? num(r.speed, 10) : undefined }); break;
-      case "face": entries.push({ ...base, type: "face", mood: String(r.mood ?? "neutral"), hold: r.hold != null ? num(r.hold, 0) : undefined, delay: r.delay != null ? num(r.delay, 0) : undefined }); break;
+      case "face": entries.push({ ...base, type: "face", actor: r.actor === "Dev" ? "Dev" : undefined, mood: String(r.mood ?? "neutral"), hold: r.hold != null ? num(r.hold, 0) : undefined, delay: r.delay != null ? num(r.delay, 0) : undefined }); break;
+      case "avatar": entries.push({ ...base, type: "avatar", to: r.to === "real" ? "real" : "avatar", over: r.over != null ? num(r.over, 1200) : undefined }); break;
       case "slide": entries.push({ ...base, type: "slide", actor: r.actor === "Glitch" ? "Glitch" : "Dev", to: String(r.to ?? "left") as SlideTarget, over: r.over != null ? num(r.over, 600) : undefined }); break;
       case "outro": entries.push({ ...base, type: "outro", next: r.next ? String(r.next) : undefined, thanks: Array.isArray(r.thanks) ? r.thanks.map(String) : undefined, phases: Array.isArray(r.phases) ? r.phases.filter((p: any) => p && OUTRO_PHASES.includes(p.phase)).map((p: any) => ({ phase: p.phase, text: p.text != null ? String(p.text).trim() : undefined, mood: p.mood ? String(p.mood) : undefined, title: p.title ? String(p.title) : undefined, subtitle: p.subtitle ? String(p.subtitle) : undefined })) : undefined }); break;
       default: errors.push(`Entry ${i}: unknown type "${r.type}"`);
@@ -82,6 +89,7 @@ export function serializeScript(script: Script): string {
     const o: any = { type: e.type };
     if (e.type === "line") o.actor = e.actor;
     if (e.type === "slide") o.actor = e.actor;
+    if (e.type === "face" && e.actor) o.actor = e.actor;
     o.start = e.start; o.end = e.end;
     if (e.auto) o.auto = true;
     if (e.type === "line") { if (e.mood) o.mood = e.mood; o.text = e.text; }
@@ -89,6 +97,7 @@ export function serializeScript(script: Script): string {
     if (e.type === "keys") { if (e.speed != null) o.speed = e.speed; o.keystrokes = e.keystrokes; }
     if (e.type === "face") { o.mood = e.mood; if (e.delay != null) o.delay = e.delay; if (e.hold != null) o.hold = e.hold; }
     if (e.type === "slide") { o.to = e.to; if (e.over != null) o.over = e.over; }
+    if (e.type === "avatar") { o.to = e.to; if (e.over != null) o.over = e.over; }
     if (e.type === "outro") { if (e.next) o.next = e.next; if (e.thanks?.length) o.thanks = e.thanks; if (e.phases?.length) o.phases = e.phases.map((p) => Object.fromEntries(Object.entries(p).filter(([, v]) => v != null && v !== ""))); }
     return o;
   });

@@ -3,17 +3,17 @@
 import { useEffect, useState } from "preact/hooks";
 import { Entry, entriesAt, nextMarker, splitMoodTags, cleanText, outroPhases, timeAtChar, speechGaps, SpeechSpan } from "../shared/script";
 import { getState, toast } from "./store";
-import { glitch } from "./components/glitch-stage";
+import { glitch, devatar } from "./components/glitch-stage";
 
 export interface ProdState {
   marker: number; take: number; recording: boolean; keysRunning: boolean; keysEntryId: string | null; keysStep: number;
-  devPos: "home" | "left" | "hidden"; speakingId: string | null; outroPhase: number;
+  devPos: "home" | "left" | "hidden"; avatar: boolean; speakingId: string | null; outroPhase: number;
   sendKeys: boolean; improvise: boolean;
 }
 export interface LogEvent { t: number; kind: string; [k: string]: any }
 
 class Production {
-  st: ProdState = { marker: -1, take: 1, recording: false, keysRunning: false, keysEntryId: null, keysStep: 0, devPos: "home", speakingId: null, outroPhase: -1, sendKeys: true, improvise: false };
+  st: ProdState = { marker: -1, take: 1, recording: false, keysRunning: false, keysEntryId: null, keysStep: 0, devPos: "home", avatar: false, speakingId: null, outroPhase: -1, sendKeys: true, improvise: false };
   private history: number[] = [];
   private keysTriggered = new Set<string>();
   private keysRunningEnd = 0;
@@ -52,6 +52,7 @@ class Production {
     this.history = []; this.keysTriggered.clear();
     this.set({ marker: -1, take: this.st.recording ? this.st.take + 1 : 1, devPos: "home" });
     glitch.setMood("neutral"); glitch.slide(getState().config?.glitch?.homeY ?? 300, 300); glitch.slide("show", 300);
+    devatar.setMood("neutral"); devatar.setToGlitch(false); this.set({ avatar: false });
     this.log("reset");
   }
 
@@ -92,13 +93,26 @@ class Production {
 
     for (const e of evs) {
       if (e.type === "face") {
-        const fire = () => { glitch.setMood(e.mood, e.hold); this.log("mood", { mood: e.mood, hold: e.hold ?? 0 }); };
+        const who = e.actor === "Dev" ? "Dev" : "Glitch";
+        const fire = () => {
+          if (who === "Dev") devatar.setMood(e.mood, e.hold); else glitch.setMood(e.mood, e.hold);
+          this.log("mood", { actor: who, mood: e.mood, hold: e.hold ?? 0 });
+        };
         if (e.delay && e.delay > 0) {
           // Late reaction: hold the current face until `delay` has passed — e.g. Glitch keeps a straight
           // face while Dev reads the line that catches him out. The log records when it actually fired,
           // so the post render follows the same beat.
           waits.push(new Promise<void>((resolve) => this.cueTimers.push(window.setTimeout(() => { fire(); resolve(); }, e.delay))));
         } else fire();
+      }
+      else if (e.type === "avatar") {
+        // The cross-fade itself is cut on the timeline. Here we only flip who
+        // is "live" and put the avatar into the glitch mood for the handover,
+        // which is what sells the swap as something being done TO him.
+        const over = e.over ?? 1200;
+        devatar.setMood("glitch");
+        this.set({ avatar: e.to === "avatar" });
+        this.log("avatar", { to: e.to, over });
       }
       else if (e.type === "slide") {
         if (e.actor === "Glitch") glitch.slide(e.to as any, e.over ?? 600);
@@ -133,6 +147,7 @@ class Production {
         waits.push(p);
       } else {
         this.log("line-start", { entryId: e.id, actor: e.actor, text: cleanText(e.text), spoken: false });
+        if (e.actor === "Dev") devatar.setTalking(true);
         // Dev reads on camera: fire inline mood cues spread over an estimated reading time (~14 chars/sec)
         const { clean, pauses } = splitMoodTags(e.text);
         this.scheduleCues(e.text, Math.max(1500, clean.length / 14 * 1000) + pauses.reduce((n, p) => n + p.ms, 0));
@@ -239,7 +254,9 @@ class Production {
   setSendKeys(v: boolean) { this.set({ sendKeys: v }); }
   setImprovise(v: boolean) { this.set({ improvise: v }); }
   /** Manual mood from the palette: applied live and logged so the post render matches. */
-  improviseMood(mood: string) { glitch.setMood(mood); this.log("mood", { mood, improvised: true }); }
+  improviseMood(mood: string) { glitch.setMood(mood); this.log("mood", { actor: "Glitch", mood, improvised: true }); }
+  /** The same, for the avatar. */
+  improviseDevMood(mood: string) { devatar.setMood(mood); this.log("mood", { actor: "Dev", mood, improvised: true }); }
 
   // ── recording ──────────────────────────────────────────────────────────────
   async startRecording() {

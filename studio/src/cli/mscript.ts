@@ -84,7 +84,7 @@ const TEMPLATE = (title: string) => `script:
 
 function load(file: string): Script { const { script, errors } = parseScript(fs.readFileSync(file, "utf8")); if (errors.length) console.error("warnings:", errors.join("; ")); return script; }
 function save(file: string, s: Script) { if (fs.existsSync(file)) fs.copyFileSync(file, file + ".bak"); fs.writeFileSync(file, serializeScript(s)); }
-const brief = (e: Entry) => e.type === "line" ? `${e.actor}${e.mood ? `[${e.mood}]` : ""}: ${cleanText(e.text).replace(/\n/g, " ").slice(0, 70)}` : e.type === "editor" ? `note: ${e.text.replace(/\n/g, " ").slice(0, 50)}` : e.type === "keys" ? `keys(${e.keystrokes.length})` : e.type === "face" ? `face:${e.mood}` : e.type === "slide" ? `slide:${e.actor}→${e.to}` : `outro(next: ${e.next ?? "-"}; thanks: ${(e.thanks ?? []).join(", ") || "-"})`;
+const brief = (e: Entry) => e.type === "line" ? `${e.actor}${e.mood ? `[${e.mood}]` : ""}: ${cleanText(e.text).replace(/\n/g, " ").slice(0, 70)}` : e.type === "editor" ? `note: ${e.text.replace(/\n/g, " ").slice(0, 50)}` : e.type === "keys" ? `keys(${e.keystrokes.length})` : e.type === "face" ? `face:${e.mood}` : e.type === "slide" ? `slide:${e.actor}→${e.to}` : e.type === "avatar" ? `avatar→${e.to}` : `outro(next: ${e.next ?? "-"}; thanks: ${(e.thanks ?? []).join(", ") || "-"})`;
 const readJson = (arg: string | undefined) => JSON.parse(!arg || arg === "-" ? fs.readFileSync(0, "utf8") : arg);
 
 function main(argv: string[]) {

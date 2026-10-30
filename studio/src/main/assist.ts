@@ -44,7 +44,7 @@ const tools: Anthropic.Tool[] = [
 function safeUnder(root: string, rel: string): string { const p = path.resolve(root, rel || "."); if (!p.startsWith(path.resolve(root))) throw new Error("path escapes the courses root"); return p; }
 
 function runTool(name: string, input: any): string {
-  const brief = (e: Entry) => e.type === "line" ? `${e.actor}${e.mood ? `[${e.mood}]` : ""}: ${cleanText(e.text).replace(/\n/g, " ").slice(0, 60)}` : e.type === "editor" ? `note: ${e.text.replace(/\n/g, " ").slice(0, 40)}` : e.type === "keys" ? `keys(${e.keystrokes.length})` : e.type === "face" ? `face:${e.mood}` : e.type === "outro" ? `outro(next: ${e.next ?? "-"}; thanks: ${(e.thanks ?? []).join(", ") || "-"})` : `slide:${e.actor}→${e.to}`;
+  const brief = (e: Entry) => e.type === "line" ? `${e.actor}${e.mood ? `[${e.mood}]` : ""}: ${cleanText(e.text).replace(/\n/g, " ").slice(0, 60)}` : e.type === "editor" ? `note: ${e.text.replace(/\n/g, " ").slice(0, 40)}` : e.type === "keys" ? `keys(${e.keystrokes.length})` : e.type === "face" ? `face:${e.mood}` : e.type === "outro" ? `outro(next: ${e.next ?? "-"}; thanks: ${(e.thanks ?? []).join(", ") || "-"})` : e.type === "avatar" ? `avatar→${e.to}` : `slide:${e.actor}→${e.to}`;
   switch (name) {
     case "list_slots": return markers(script).map((m) => `${m}: ${entriesAt(script, m).map(brief).join(" | ")}`).join("\n") || "(empty script)";
     case "get_slots": return JSON.stringify(script.entries.filter((e) => e.start >= input.from && e.start <= input.to).map(({ id, ...e }) => e), null, 1);

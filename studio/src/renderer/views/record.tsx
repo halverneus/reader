@@ -24,7 +24,7 @@ export function RecordView() {
     <div class="record-view">
       <Prompter />
       <aside class="side">
-        <GlitchStage devPos={p.devPos} />
+        <GlitchStage devPos={p.devPos} avatar={p.avatar} />
         <MoodPalette compact />
         <Sources devPos={p.devPos} />
       </aside>

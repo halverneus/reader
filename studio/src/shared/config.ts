@@ -36,7 +36,7 @@ export interface Config {
   kokoro: { url: string; autoStart: boolean; image: string };
   /** size: Glitch's arm + head relative to the original design (0.75 since 2026-09-13). `scale` is unused. */
   glitch: { homeY: number; seed: number; scale: number; size: number };
-  dev: { rect: { x: number; y: number; w: number; h: number }; leftX: number };
+  dev: { rect: { x: number; y: number; w: number; h: number }; leftX: number; avatar?: { x: number; y: number; scale: number } };
 }
 
 const home = os.homedir();
@@ -66,7 +66,9 @@ export const DEFAULTS: Config = {
   vm: { uri: "qemu:///session", domain: "", width: 1920, height: 1080 },
   kokoro: { url: "http://localhost:8880", autoStart: true, image: "ghcr.io/remsky/kokoro-fastapi-gpu:latest" },
   glitch: { homeY: 300, seed: 7, scale: 1, size: 0.75 },
-  dev: { rect: { x: 1152, y: 648, w: 768, h: 432 }, leftX: 0 },
+  // avatar x/y/scale place the drawn bust where the matted camera puts the
+  // real one, so a cross-fade lands head on head. Nudge if the swap drifts.
+  dev: { rect: { x: 1152, y: 648, w: 768, h: 432 }, leftX: 0, avatar: { x: 982, y: 352, scale: 0.9 } },
 };
 
 export function deepMerge<T>(a: T, b: any): T {

@@ -58,7 +58,7 @@ export function resolveSegments(session: any): Segment[] {
 // ── speech detection ─────────────────────────────────────────────────────────
 /** Spoken spans in the mic file, shifted onto the desktop clock. A 100 ms window is speech when its RMS is well above
  *  the recording's own noise floor (breaths and chair creaks sit in between, so a fixed dB threshold misfires). */
-async function micSpeech(file: string, micOffset: number): Promise<Span[]> {
+export async function micSpeech(file: string, micOffset: number): Promise<Span[]> {
   const frames = await rmsEnvelope(file);
   if (!frames.length) return [];
   const threshold = Math.min(-36, Math.max(-48, percentileDb(frames, 0.1) + 18));
@@ -75,15 +75,15 @@ async function micSpeech(file: string, micOffset: number): Promise<Span[]> {
 interface Clip { id: number; kind: "av" | "video" | "audio" | "image"; file: string; name: string; frames: number; hasAudio: boolean; hasVideo: boolean }
 interface Placed { clip: Clip; at: number; in: number; len: number; speed?: number; filters?: string[] } // frames
 interface Track { name: string; audio: boolean; items: Placed[] }
-type TrackKey = "muA" | "ovA" | "devA" | "glA" | "bgV" | "glV" | "devV" | "faceV" | "ovV";
-const ORDER: TrackKey[] = ["muA", "ovA", "devA", "glA", "bgV", "glV", "devV", "faceV", "ovV"];
+type TrackKey = "muA" | "ovA" | "devA" | "glA" | "bgV" | "glV" | "devV" | "avV" | "faceV" | "ovV";
+const ORDER: TrackKey[] = ["muA", "ovA", "devA", "glA", "bgV", "glV", "devV", "avV", "faceV", "ovV"];
 
 class Project {
   clips: Clip[] = []; nextId = 4; xml: string[] = []; producers: string[] = []; nProd = 0; nFilter = 0;
   guides: { comment: string; pos: number; type: number }[] = [];
   tracks: Record<TrackKey, Track> = {
     muA: { name: "Music", audio: true, items: [] }, ovA: { name: "Overlays", audio: true, items: [] }, devA: { name: "Dev", audio: true, items: [] }, glA: { name: "Glitch", audio: true, items: [] },
-    bgV: { name: "Background", audio: false, items: [] }, glV: { name: "Glitch", audio: false, items: [] }, devV: { name: "Dev", audio: false, items: [] }, faceV: { name: "Glitch Face", audio: false, items: [] }, ovV: { name: "Overlays", audio: false, items: [] },
+    bgV: { name: "Background", audio: false, items: [] }, glV: { name: "Glitch", audio: false, items: [] }, devV: { name: "Dev", audio: false, items: [] }, avV: { name: "Avatar Dev", audio: false, items: [] }, faceV: { name: "Glitch Face", audio: false, items: [] }, ovV: { name: "Overlays", audio: false, items: [] },
   };
   async addClip(file: string, kind: Clip["kind"], name = path.basename(file)): Promise<Clip> {
     const existing = this.clips.find((c) => c.file === file); if (existing) return existing;
@@ -230,6 +230,10 @@ ${seq}
 
 // ── filters (in/out are in the clip's own time, i.e. relative to the entry's in-point source) ──
 const fadeToBlack = (at: number, len: number) => `   <filter id="FID" in="${tc(at)}" out="${tc(at + len - 1)}">\n    <property name="start">1</property>\n    <property name="level">1</property>\n    <property name="mlt_service">brightness</property>\n    <property name="kdenlive_id">fade_to_black</property>\n    <property name="alpha">${tc(0)}=1;${tc(len - 1)}=0</property>\n   </filter>`;
+/** Alpha keyframes over the whole clip. The avatar rides above the real Dev,
+ *  so fading IT in dissolves one into the other and the camera track below
+ *  never has to be touched. */
+const alphaKeys = (pairs: [number, number][]) => `   <filter id="FID">\n    <property name="start">1</property>\n    <property name="level">1</property>\n    <property name="mlt_service">brightness</property>\n    <property name="kdenlive_id">fade_to_black</property>\n    <property name="alpha">${pairs.map(([f, v]) => `${tc(Math.max(0, Math.round(f)))}=${v.toFixed(3)}`).join(";")}</property>\n   </filter>`;
 const chromaFilter = (at: number, key: { color: string; similarity: number }) => `   <filter id="FID">\n    <property name="key">${tc(at)}=0x${key.color.replace("#", "").toLowerCase().padEnd(6, "0")}ff</property>\n    <property name="variance">${tc(at)}=${key.similarity}</property>\n    <property name="mlt_service">chroma</property>\n    <property name="kdenlive_id">chroma</property>\n    <property name="kdenlive:collapsed">1</property>\n   </filter>`;
 const rectFilter = (keys: { at: number; x: number; y: number; w: number; h: number }[]) => `   <filter id="FID">\n    <property name="rotate_center">1</property>\n    <property name="mlt_service">qtblend</property>\n    <property name="kdenlive_id">qtblend</property>\n    <property name="compositing">0</property>\n    <property name="distort">0</property>\n    <property name="rect">${keys.map((k) => `${tc(k.at)}=${k.x} ${k.y} ${k.w} ${k.h} 1.000000`).join(";")}</property>\n    <property name="rotation">${tc(keys[0].at)}=0</property>\n    <property name="kdenlive:collapsed">1</property>\n   </filter>`;
 const volumeFilter = (db: number) => `   <filter id="FID">\n    <property name="window">75</property>\n    <property name="max_gain">20dB</property>\n    <property name="level">${tc(0)}=${db}</property>\n    <property name="channel_mask">-1</property>\n    <property name="mlt_service">volume</property>\n    <property name="kdenlive_id">volume</property>\n   </filter>`;
@@ -305,6 +309,8 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
   const cDesk = await P.addClip(desktop, "av", "Desktop");
   const cCam = cam ? await P.addClip(cam, "av", cam === devAlpha ? "Dev (alpha)" : "Dev (cam)") : null;
   const cGlitch = fs.existsSync(glitchFile) ? await P.addClip(glitchFile, "video", "Glitch") : null;
+  const avatarFile = path.join(dir, "devatar.webm");
+  const cAvatar = fs.existsSync(avatarFile) ? await P.addClip(avatarFile, "video", "Avatar Dev") : null;
   // GStreamer sessions record the mic on its own (mic.flac); it becomes Dev's audio instead of the cam file's
   // the cleaned mic (clean step) goes on the timeline; the raw one stays in the bin to swap back, and drives speech detection
   const micRaw: string | undefined = [session.meta.files?.mic, path.join(dir, "mic.flac")].find((f) => f && fs.existsSync(f));
@@ -419,6 +425,21 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
     if (cIntro.hasAudio) P.place("ovA", { clip: cIntro, at: introAt, in: 0, len: cIntro.frames });
     P.guides.push({ comment: "Intro", pos: introAt, type: 6 });
   }
+  // When the avatar is on screen. 0 = the real camera, 1 = the drawing; the
+  // ramps between are the swap itself.
+  const swaps: { t: number; to: number; over: number }[] = evs
+    .filter((e: any) => e.kind === "avatar")
+    .map((e: any) => ({ t: rel(e.t), to: e.to === "avatar" ? 1 : 0, over: Math.max(0.05, (e.over ?? 1200) / 1000) }));
+  const avatarAt = (t: number): number => {
+    let v = 0;
+    for (const sw of swaps) {
+      if (t <= sw.t) break;
+      v = t >= sw.t + sw.over ? sw.to : v + (sw.to - v) * ((t - sw.t) / sw.over);
+    }
+    return v;
+  };
+  if (cAvatar) log(`[project] avatar Dev: ${swaps.length} swap${swaps.length === 1 ? "" : "s"}\n`);
+
   const devRect = cfg.dev.rect;
   // Where Dev's box is standing. Carried from one piece to the next on
   // purpose: the keyframes below start afresh at every take boundary, so
@@ -445,6 +466,22 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
       }
       const filters: string[] = []; if (cCam.file !== devAlpha) filters.push(chromaFilter(inC, cfg.capture.key)); if (keys.length) filters.push(rectFilter(keys.map((k) => ({ ...k, at: k.at + inC }))));
       if (inC >= 0) { P.place("devV", { clip: cCam, at, in: inC, len, speed, filters }); if (cCam.hasAudio && !cMic) P.place("devA", { clip: cCam, at, in: inC, len, speed }); }
+      // The avatar takes the same box and the same slides; only its opacity
+      // differs. It is rendered from recording t=0, so it carries no camOffset.
+      if (cAvatar) {
+        const inA = inOf(p.src0);
+        const kf: [number, number][] = [[inA, avatarAt(p.src0)]];
+        for (const sw of swaps) {
+          if (sw.t + sw.over < p.src0 || sw.t > p.src1) continue;
+          const f0 = inA + Math.round(fr(sw.t - p.src0) / (speed ?? 1));
+          kf.push([f0, avatarAt(sw.t)], [f0 + Math.round(fr(sw.over) / (speed ?? 1)), sw.to]);
+        }
+        kf.push([inA + len - 1, avatarAt(p.src1)]);
+        const af: string[] = [];
+        if (keys.length) af.push(rectFilter(keys.map((k) => ({ ...k, at: k.at + inA }))));
+        af.push(alphaKeys(kf.sort((a, b) => a[0] - b[0])));
+        if (inA >= 0) P.place("avV", { clip: cAvatar, at, in: inA, len, speed, filters: af });
+      }
     }
     if (cMic) {
       // no sound from before the take began (pre-roll under the intro may reach into an earlier take)

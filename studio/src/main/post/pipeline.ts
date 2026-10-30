@@ -6,6 +6,7 @@ import { checkCapture } from "./check";
 import { cleanMic } from "./clean-audio";
 import { matteCam } from "./matte";
 import { renderGlitch } from "./glitch-render";
+import { renderDevatar } from "./devatar-render";
 import { renderOutro } from "./outro-render";
 import { buildProject } from "./kdenlive";
 import { renderVideo } from "./render";
@@ -23,6 +24,7 @@ export async function runPipeline(dir: string, what: string, onSteps: (s: StepSt
     { id: "clean", label: "Clean mic audio (low cut + RNNoise + soft gate) → mic-clean.flac", state: "idle" },
     { id: "matte", label: "Matte Dev (RVM in Docker, GPU) → dev-alpha.webm", state: "idle" },
     { id: "glitch", label: "Render Glitch from the cue log → glitch.webm", state: "idle" },
+    { id: "devatar", label: "Render avatar Dev from the cue log → devatar.webm", state: "idle" },
     { id: "outro", label: "Render the branded outro → outro.webm (+ sound design)", state: "idle" },
     { id: "project", label: "Build Kdenlive project (latest take wins)", state: "idle" },
     { id: "render", label: "Render the video with Kdenlive → MP4", state: "idle" },
@@ -45,6 +47,7 @@ export async function runPipeline(dir: string, what: string, onSteps: (s: StepSt
   await run("clean", () => cleanMic(dir, session, log));
   await run("matte", () => matteCam(dir, session, log));
   await run("glitch", () => renderGlitch(dir, session, log));
+  await run("devatar", () => renderDevatar(dir, session, log));
   await run("outro", () => renderOutro(dir, session, log));
   await run("project", () => buildProject(dir, session, log));
   await run("render", (progress) => renderVideo(dir, session, log, progress));
