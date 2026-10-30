@@ -18,7 +18,7 @@ lesson when it opens, and playback is then a file read.
 Deliberately stdlib-only apart from F5-TTS itself: it runs inside the
 devavatar venv, which is the only place torch is installed.
 """
-import argparse, hashlib, json, os, queue, sys, threading, time
+import argparse, hashlib, json, os, queue, re, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 P = argparse.ArgumentParser()
@@ -30,15 +30,24 @@ P.add_argument("--seed", type=int, default=20261029)
 A = P.parse_args()
 os.makedirs(A.cache, exist_ok=True)
 
-STATE = {"state": "loading", "device": "?", "rendered": 0, "hits": 0}
+STATE = {"state": "loading", "device": "?", "rendered": 0, "hits": 0, "overrides": 0}
 _api = None
 _lock = threading.Lock()          # F5-TTS is not re-entrant; one at a time
 _q: "queue.Queue[str]" = queue.Queue()
 _pending: set[str] = set()
 
+def norm(text: str) -> str:
+    """Line wrapping is cosmetic, so it must not reach the key or the model.
+
+    Scripts are hard-wrapped at 70 columns, which means re-flowing a cell
+    changes every newline in it. Keyed on the raw text that invalidates audio
+    that would have been identical, and the model sees breaks that are not in
+    the writing."""
+    return re.sub(r"\s+", " ", text).strip()
+
 def key(text: str) -> str:
     h = hashlib.sha1()
-    h.update(text.strip().encode())
+    h.update(norm(text).encode())
     h.update(b"\x00")
     h.update(os.path.basename(A.ref_wav).encode())
     h.update(str(A.seed).encode())
@@ -46,6 +55,16 @@ def key(text: str) -> str:
 
 def path_for(text: str) -> str:
     return os.path.join(A.cache, key(text) + ".wav")
+
+def override_for(text: str) -> str:
+    """A hand-recorded take for one line. If this exists it always wins, so a
+    line the model keeps getting wrong can simply be performed instead."""
+    return os.path.join(A.cache, key(text) + ".override.wav")
+
+def ready(text: str) -> bool:
+    for p in (override_for(text), path_for(text)):
+        if os.path.exists(p) and os.path.getsize(p) > 44: return True
+    return False
 
 def load():
     global _api
@@ -60,6 +79,10 @@ def load():
     print(f"[devvoice] model ready on {dev} in {STATE['load_seconds']}s", flush=True)
 
 def render(text: str) -> str:
+    ov = override_for(text)
+    if os.path.exists(ov) and os.path.getsize(ov) > 44:
+        STATE["overrides"] += 1
+        return ov
     dst = path_for(text)
     if os.path.exists(dst) and os.path.getsize(dst) > 44:
         STATE["hits"] += 1
@@ -71,7 +94,7 @@ def render(text: str) -> str:
         # fails outright. Keep the .wav and make the name unique instead.
         tmp = dst[:-4] + f".part{os.getpid()}.wav"
         t0 = time.time()
-        _api.infer(ref_file=A.ref_wav, ref_text=A.ref_text, gen_text=text,
+        _api.infer(ref_file=A.ref_wav, ref_text=A.ref_text, gen_text=norm(text),
                    file_wave=tmp, remove_silence=True, seed=A.seed)
         os.replace(tmp, dst)
         STATE["rendered"] += 1
@@ -104,11 +127,22 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         try: body = json.loads(self.rfile.read(n) or b"{}")
         except Exception: return self._json(400, {"error": "bad json"})
+        if self.path.startswith("/have"):
+            # what the caller still needs, so a progress bar can be honest
+            texts = [t for t in (body.get("texts") or []) if isinstance(t, str) and t.strip()]
+            seen, done = set(), 0
+            for t in texts:
+                k = key(t)
+                if k in seen: continue
+                seen.add(k)
+                if ready(t): done += 1
+            return self._json(200, {"total": len(seen), "ready": done,
+                                    "pending": len(seen) - done, "queued": _q.qsize()})
         if self.path.startswith("/warm"):
             texts = [t for t in (body.get("texts") or []) if isinstance(t, str) and t.strip()]
             queued = 0
             for t in texts:
-                if os.path.exists(path_for(t)) or t in _pending: continue
+                if ready(t) or t in _pending: continue
                 _pending.add(t); _q.put(t); queued += 1
             return self._json(200, {"queued": queued, "already": len(texts) - queued})
         if self.path.startswith("/speak"):

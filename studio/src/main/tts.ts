@@ -178,6 +178,17 @@ export function registerTtsIpc() {
     } catch (e: any) { return { error: e.message }; }
   });
   ipcMain.handle("devvoice:status", () => pollDevVoice());
+  /** How much of a script is already rendered, for the progress readout. */
+  ipcMain.handle("devvoice:have", async (_e, texts: string[]) => {
+    const { url } = loadConfig().devVoice;
+    try {
+      const r = await fetch(url.replace(/\/$/, "") + "/have", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ texts }),
+      });
+      return r.ok ? await r.json() : null;
+    } catch { return null; }
+  });
   ipcMain.handle("devvoice:start", () => startDevVoice());
   ipcMain.handle("kokoro:start", () => startKokoroContainer());
   ipcMain.handle("kokoro:status", () => pollKokoro());

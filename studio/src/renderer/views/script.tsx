@@ -7,12 +7,50 @@ import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { useStore, toast } from "../store";
-import { loadScriptFile, saveScript, setScriptText, updateScript, createScript } from "../script-io";
-import { Entry, markers, entriesAt, markerBetween, newId, parseScript, STEP_HELP, outroPhases, OUTRO_PHASES, cleanText, rewrapEntry } from "../../shared/script";
+import { loadScriptFile, saveScript, setScriptText, updateScript, createScript, clonedTexts } from "../script-io";
+import { Entry, Script, markers, entriesAt, markerBetween, newId, parseScript, STEP_HELP, outroPhases, OUTRO_PHASES, cleanText, rewrapEntry } from "../../shared/script";
 import { checkScript, type Finding } from "../../shared/check";
 import { MOOD_NAMES } from "../../../glitch/moods";
 import type { ScriptFileInfo } from "../../shared/ipc";
 import { Assist } from "../components/assist";
+
+/** How much of this script is already rendered in Dev's cloned voice.
+ *
+ *  The voice runs at about real time, so "is it all ready yet" is the one
+ *  thing worth knowing before pressing record. It re-checks whenever the
+ *  script changes, which is also exactly when editing a line invalidates its
+ *  audio, and re-warms whatever is missing. */
+function VoiceReady({ script }: { script: Script }) {
+  const [st, setSt] = useState<{ total: number; ready: number; queued: number } | null>(null);
+  const texts = useMemo(() => clonedTexts(script), [script]);
+  useEffect(() => {
+    if (!texts.length) { setSt(null); return; }
+    let alive = true;
+    const tick = async () => {
+      const r: any = await window.studio.invoke("devvoice:have", texts).catch(() => null);
+      if (!alive) return;
+      if (r) {
+        setSt({ total: r.total, ready: r.ready, queued: r.queued });
+        if (r.pending && !r.queued) window.studio.invoke("devvoice:warm", texts).catch(() => {});
+      } else setSt(null);
+    };
+    tick();
+    const h = window.setInterval(tick, 2000);
+    return () => { alive = false; clearInterval(h); };
+  }, [texts]);
+  if (!st || !st.total) return null;
+  const done = st.ready >= st.total;
+  const pct = Math.round((st.ready / st.total) * 100);
+  return (
+    <span class="muted mono" style="font-size:11px;display:inline-flex;align-items:center;gap:6px"
+      title={done ? "Every line is rendered in Dev's voice and will play instantly" : `${st.total - st.ready} chunk(s) still to render, about four seconds each`}>
+      <span style="display:inline-block;width:62px;height:5px;border-radius:3px;background:#2a3140;overflow:hidden">
+        <span style={`display:block;height:100%;width:${pct}%;background:${done ? "#3fc9c0" : "#ffb44a"}`} />
+      </span>
+      {done ? "voice ready" : `voice ${st.ready}/${st.total}`}
+    </span>
+  );
+}
 
 export function ScriptView() {
   const s = useStore();
@@ -57,6 +95,7 @@ export function ScriptView() {
           <button class={"btn sm" + (mode === "slots" ? " primary" : "")} onClick={() => setMode("slots")}>Slots</button>
           <button class={"btn sm" + (mode === "yaml" ? " primary" : "")} onClick={() => setMode("yaml")}>YAML</button>
           <span style="flex:1" />
+          <VoiceReady script={s.script} />
           <span class="muted mono" style="font-size:12px">{s.script.entries.length} entries · {markers(s.script).length} markers{errs.length ? ` · ${errs.length} error${errs.length === 1 ? "" : "s"}` : ""}{advice.length ? ` · ${advice.length} advisory` : ""}</span>
           <button class="btn sm" onClick={() => updateScript((sc) => { const m = markers(sc); const start = m.length ? m[m.length - 1] + 100 : 100; sc.entries.push({ id: newId(), type: "line", actor: "Dev", start, end: start + 100, text: "" }); })}>+ marker</button>
           <button class="btn sm primary" disabled={!s.dirty} onClick={() => saveScript()}>Save <kbd>⌃S</kbd></button>

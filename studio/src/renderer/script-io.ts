@@ -1,4 +1,4 @@
-import { parseScript, serializeScript, Script, splitMoodTags } from "../shared/script";
+import { parseScript, serializeScript, Script, speechChunks } from "../shared/script";
 import { markerDiff, textHash } from "../shared/diff";
 import { getState, setState, toast } from "./store";
 
@@ -92,25 +92,36 @@ export function installBridgeListeners() {
   });
 }
 
+/** Exactly the texts playback will ask the voice service for.
+ *
+ *  This has to match `synthLine`, which splits a line into speech chunks
+ *  around its [pause] and [mood] tags and synthesises each chunk separately.
+ *  Warming the whole cleaned line instead cached entries under keys nothing
+ *  ever requested: every preview still generated from scratch, and the cache
+ *  looked like it was being wiped on restart when in fact it was never being
+ *  read. */
+export function clonedTexts(script: Script): string[] {
+  const cfg = getState().config;
+  const cloned = Object.entries(cfg?.voices ?? {})
+    .filter(([, v]) => v === "dev-clone").map(([a]) => a);
+  if (!cloned.length) return [];
+  const out: string[] = [];
+  for (const e of script.entries) {
+    if (e.type !== "line" || !cloned.includes(e.actor)) continue;
+    for (const c of speechChunks(e.text)) if (c.text.trim()) out.push(c.text);
+  }
+  return out;
+}
+
 /** Render Dev's lines ahead of time.
  *
  *  His cloned voice runs at about real time, so a line asked for on demand
  *  arrives a beat after it is wanted. Handing the whole script over when it
  *  opens means the cache is warm long before anyone presses record, and a
  *  cache hit is a file read. Lines already rendered are skipped by the
- *  service, so re-opening a script costs nothing.
- */
+ *  service, so re-opening a script costs nothing. */
 export function warmClonedVoice(script: Script) {
-  const cfg = getState().config;
-  const cloned = Object.entries(cfg?.voices ?? {})
-    .filter(([, v]) => v === "dev-clone").map(([a]) => a);
-  if (!cloned.length) return;
-  const texts = script.entries
-    .filter((e): e is Extract<typeof e, { type: "line" }> => e.type === "line" && cloned.includes(e.actor))
-    .map((e) => splitMoodTags(e.text).clean.trim())
-    .filter((t) => t.length > 0);
+  const texts = clonedTexts(script);
   if (!texts.length) return;
-  window.studio.invoke("devvoice:warm", texts)
-    .then((r: any) => { if (r?.queued) toast(`Rendering ${r.queued} line(s) in Dev's voice`, "info"); })
-    .catch(() => {});
+  window.studio.invoke("devvoice:warm", texts).catch(() => {});
 }
