@@ -6,7 +6,8 @@ import os from "node:os";
 import { loadConfig } from "./config";
 import { currentSession } from "./session";
 import { broadcast } from "./index";
-import { speechChunks, SpeechSpan } from "../shared/script";
+import { parseScript, speechChunks, SpeechSpan } from "../shared/script";
+import { listScripts } from "./scripts";
 
 const PREVIEW = "Hello, this is a preview. Testing one two three. How does this voice sound to you?";
 export let kokoroState: "down" | "starting" | "ready" = "down";
@@ -209,6 +210,29 @@ export function registerTtsIpc() {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   }).then((r) => r.json()).catch((e) => ({ error: e.message }));
   ipcMain.handle("devvoice:delete", (_e, keys: string[]) => post("/delete", { keys }));
+  /** Forget every clip no script asks for any more.
+   *
+   *  Warming used to fire on each keystroke, so the cache filled with audio
+   *  for half-typed words. Rather than guess which rows those are, read every
+   *  script, work out the chunks they genuinely need, and keep only those.
+   *  Hand-recorded takes survive regardless: the service refuses to drop them
+   *  because they cannot be made again. */
+  ipcMain.handle("devvoice:prune", async (_e, dry: boolean) => {
+    const cloned = Object.entries(loadConfig().voices ?? {})
+      .filter(([, v]) => v === CLONE_VOICE).map(([a]) => a);
+    if (!cloned.length) return { error: "no actor uses the cloned voice" };
+    const texts: string[] = [];
+    for (const f of listScripts()) {
+      let doc = "";
+      try { doc = fs.readFileSync(f.path, "utf8"); } catch { continue; }
+      for (const e of parseScript(doc).script.entries) {
+        if (e.type !== "line" || !cloned.includes(e.actor)) continue;
+        for (const c of speechChunks(e.text)) if (c.text.trim()) texts.push(c.text);
+      }
+    }
+    if (!texts.length) return { error: "found no cloned lines in any script; refusing to prune" };
+    return post("/prune", { texts, dry });
+  });
   ipcMain.handle("devvoice:unoverride", (_e, text: string) => post("/unoverride", { text }));
   /** Save a hand-performed take for one line.
    *

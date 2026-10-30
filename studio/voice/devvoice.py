@@ -262,6 +262,25 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type", "audio/wav")
             self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
             return
+        if self.path.startswith("/prune"):
+            # Keep what the scripts still ask for, drop the rest. Hand-recorded
+            # takes are never touched: they cannot be regenerated, and a line
+            # that was performed once is worth more than the space it uses.
+            keep = {key(t) for t in (body.get("texts") or []) if isinstance(t, str) and t.strip()}
+            if not keep: return self._json(400, {"error": "refusing to prune against an empty keep set"})
+            dry = bool(body.get("dry"))
+            gone, freed, kept = 0, 0, 0
+            with _db_lock, db() as c:
+                rows = c.execute("SELECT key, bytes, source FROM clips").fetchall()
+            for k, by, src in rows:
+                if k in keep or src == "recorded": kept += 1; continue
+                gone += 1; freed += by or 0
+                if dry: continue
+                for suffix in (".wav", ".override.wav"):
+                    p2 = os.path.join(A.cache, k + suffix)
+                    if os.path.exists(p2): os.remove(p2)
+                with _db_lock, db() as c: c.execute("DELETE FROM clips WHERE key=?", (k,))
+            return self._json(200, {"removed": gone, "freed": freed, "kept": kept, "dry": dry})
         if self.path.startswith("/delete"):
             keys = [k for k in (body.get("keys") or []) if isinstance(k, str)]
             gone = 0

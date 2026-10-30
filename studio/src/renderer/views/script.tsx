@@ -22,7 +22,21 @@ import { Assist } from "../components/assist";
  *  audio, and re-warms whatever is missing. */
 function VoiceReady({ script }: { script: Script }) {
   const [st, setSt] = useState<{ total: number; ready: number; queued: number } | null>(null);
-  const texts = useMemo(() => clonedTexts(script), [script]);
+  const live = useMemo(() => clonedTexts(script), [script]);
+  // Settle before asking for audio.
+  //
+  // Every keystroke makes a new script object, and warming on that rendered
+  // a clip for each half-typed word: forty lines of real dialogue arrived
+  // buried in hundreds of fragments. Wait for typing to stop, and flush
+  // early when a field loses focus, which is the moment a line is finished
+  // even if the pause was short.
+  const [texts, setTexts] = useState<string[]>(live);
+  useEffect(() => {
+    const h = window.setTimeout(() => setTexts(live), 2500);
+    const flush = () => { window.clearTimeout(h); setTexts(live); };
+    document.addEventListener("focusout", flush);
+    return () => { window.clearTimeout(h); document.removeEventListener("focusout", flush); };
+  }, [live]);
   useEffect(() => {
     if (!texts.length) { setSt(null); return; }
     let alive = true;

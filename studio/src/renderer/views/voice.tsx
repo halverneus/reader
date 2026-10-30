@@ -74,6 +74,21 @@ export function VoiceView() {
     toast("Back to the generated take", "info"); refresh();
   };
 
+  /** Two passes on purpose: say what would go, then do it. Deleting audio is
+   *  cheap to redo but slow, so it is worth one confirmation. */
+  const prune = async () => {
+    setBusy(true);
+    try {
+      const d: any = await window.studio.invoke("devvoice:prune", true);
+      if (d?.error) return toast(d.error, "error");
+      if (!d?.removed) return toast("Nothing to prune; every clip is still in use", "info");
+      if (!window.confirm(`Remove ${d.removed} unused clip(s) and free ${mb(d.freed)}?\n\n${d.kept} still in use, and recorded takes are always kept.`)) return;
+      const r: any = await window.studio.invoke("devvoice:prune", false);
+      toast(`Removed ${r.removed} clip(s), freed ${mb(r.freed)}`, "info");
+      setSel(new Set()); refresh();
+    } finally { setBusy(false); }
+  };
+
   const lessons = useMemo(() => stats?.lessons ?? [], [stats]);
 
   return (
@@ -84,6 +99,7 @@ export function VoiceView() {
         {stats && <span class="muted mono" style="font-size:12px">{stats.clips} clips · {mb(stats.bytes)}{stats.recorded ? ` · ${stats.recorded} recorded` : ""}</span>}
         <button class="btn sm" onClick={refresh}>Refresh</button>
         <button class="btn sm" disabled={!sel.size || busy} onClick={remove}>Delete {sel.size || ""}</button>
+        <button class="btn sm" disabled={busy} title="Drop every clip no script asks for any more. Recorded takes are kept." onClick={prune}>Prune unused</button>
       </div>
 
       <div class="toolbar" style="margin-bottom:10px">
