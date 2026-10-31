@@ -3,7 +3,7 @@ import { useEffect, useState } from "preact/hooks";
 import type { Script } from "../shared/script";
 import { textHash } from "../shared/diff";
 
-export type Tab = "script" | "record" | "post" | "voice" | "settings";
+export type Tab = "script" | "record" | "post" | "voice" | "gestures" | "settings";
 export interface AppState {
   tab: Tab;
   config: any | null;

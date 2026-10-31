@@ -7,6 +7,10 @@ import { crossRepeats } from "../shared/across";
 import { checkScript, errorsOf, type Finding } from "../shared/check";
 import { readDeck } from "../shared/deck";
 import { MOOD_NAMES, MOODS } from "../../glitch/moods";
+import { installUserGestures } from "../shared/gestures";
+
+// his own gestures count as known names in a [hand ...] tag
+installUserGestures();
 
 const HELP = `mscript — Metrik Studio script CLI
 

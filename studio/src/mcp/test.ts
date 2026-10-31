@@ -7,7 +7,7 @@ import { verbless, runup, checkText, COURSEWORK, errorsOf } from "../shared/chec
 import { Editor, replayText, SUSPICIOUS } from "../shared/wb";
 import { keyStatus } from "../shared/keys";
 import { cameraPlan, parseScript, serializeScript, splitMoodTags, speechChunks, validate, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
-import { GESTURES, GESTURE_NAMES, gestureLength, holdAt } from "../../glitch/dev-hands-data";
+import { applyGestures, GESTURES, gestureNames, gestureLength, holdAt, HOME } from "../../glitch/dev-hands-data";
 import { markerDiff } from "../shared/diff";
 import { crossRepeats } from "../shared/across";
 import { MOODS, MOOD_NAMES } from "../../glitch/moods";
@@ -805,7 +805,32 @@ group("avatar Dev's hands");
   ok((f.entries[0] as any).actor === "Dev", "a face can belong to Dev");
   ok(/actor: Dev/.test(serializeScript(f)), "and it survives a save");
 
-  ok(GESTURE_NAMES.includes("greeting") && GESTURE_NAMES.includes("signoff"), "both of his standing moves are present");
+  ok(gestureNames().includes("greeting") && gestureNames().includes("signoff"), "both of his standing moves are present");
+
+  // what he authors in the Gestures tab is saved beside the config, and only
+  // the parts that differ from the shipped table are kept
+  {
+    const mine = { wave_hi: { label: "a test one", hold: 1, keys: [
+      { t: 0, p: { ...HOME } },
+      { t: .5, p: { ua: 16, fa: 18, len: 360, rot: 8, scale: 1.9, shape: "palm", vis: 1 } },
+      { t: 1.5, p: { ...HOME } }] } };
+    applyGestures(mine as any);
+    ok(gestureNames().includes("wave_hi"), "one of his own joins the table");
+    ok(gestureNames().includes("one"), "and the built-ins are still there");
+    ok(validate(parseScript(`script:
+- type: "line"
+  actor: "Dev"
+  start: 100
+  end: 200
+  text: "[hand wave_hi] Hello."
+`).script).length === 0, "so a script can name it");
+    const retuned = { one: { ...GESTURES.one, label: "changed" } };
+    applyGestures(retuned as any);
+    ok(GESTURES.one.label === "changed", "a built-in can be retuned by name");
+    ok(!gestureNames().includes("wave_hi"), "and applying a new set replaces the old one rather than piling up");
+    applyGestures({});
+    ok(GESTURES.one.label !== "changed", "clearing it puts the shipped version back");
+  }
   ok(gestureLength("greeting") > 3 && gestureLength("signoff") > 3, "each runs long enough to cover its line");
   ok(gestureLength("nope") === 0, "an unknown gesture has no length, so it never holds the arm up");
 

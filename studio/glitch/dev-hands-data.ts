@@ -59,7 +59,7 @@ export interface Gesture {
 
 /** Jeromy's numbers, tuned against his own footage 2026-10-30. Times are
  *  seconds from the start of the line the gesture is attached to. */
-export const GESTURES: Record<string, Gesture> = {
+export const BUILTIN_GESTURES: Record<string, Gesture> = {
   greeting: {
     label: "The opening wave: palm forward on \u201cGreetings!\u201d, then the same hand to his chest on \u201cI'm Dev the Developer\u201d.",
     keys: [
@@ -103,7 +103,7 @@ const held = (label: string, shape: string, p: Partial<HandPose> = {}, inS = 0.5
     { t: inS + outS, p: { ...HOME } },
   ],
 });
-Object.assign(GESTURES, {
+Object.assign(BUILTIN_GESTURES, {
   one:   held("One finger up, for counting off the first of something.", "one_up"),
   two:   held("Two fingers up, for the second of something.", "two_up"),
   three: held("Three fingers up.", "three_up"),
@@ -113,7 +113,20 @@ Object.assign(GESTURES, {
   up:    held("One finger raised and held: \u201cnote this\u201d, \u201cthe important bit\u201d.", "point_up", { rot: -6, fa: 6, scale: 2.0 }),
 });
 
-export const GESTURE_NAMES = Object.keys(GESTURES);
+/** The table in play: the built-ins, with anything he has authored in the
+ *  Gestures tab layered over the top. Mutated in place by `applyGestures` so
+ *  the rig, the renderer and the script tooling all see one table. */
+export const GESTURES: Record<string, Gesture> = { ...BUILTIN_GESTURES };
+
+/** Replace the live table with the built-ins plus `user`. */
+export function applyGestures(user: Record<string, Gesture> = {}): void {
+  for (const k of Object.keys(GESTURES)) delete GESTURES[k];
+  Object.assign(GESTURES, BUILTIN_GESTURES, user);
+}
+
+/** The names in play. A function, not a snapshot: his own gestures arrive
+ *  after this module is first imported. */
+export const gestureNames = () => Object.keys(GESTURES);
 /** The reserved name that releases whatever is held and puts the arm away. */
 export const GESTURE_HOME = "home";
 /** How long a gesture runs end to end. A held one never gets there on its

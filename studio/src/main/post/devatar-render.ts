@@ -19,6 +19,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../config";
+import { installUserGestures } from "../../shared/gestures";
+import { GESTURES } from "../../../glitch/dev-hands-data";
 import type { Log } from "./pipeline";
 import { talkCues } from "../../shared/script";
 import { micSpeech } from "./kdenlive";
@@ -78,6 +80,11 @@ export async function renderDevatar(dir: string, session: any, log: Log): Promis
   await win.loadFile(path.join(__dirname, "../renderer/devatar.html"), {
     query: { manual: "1", seed: String(cfg.glitch.seed), x: String(av.x), y: String(av.y), scale: String(av.scale) },
   });
+
+  // his own gestures, which the page does not have: it was built with the
+  // shipped table and knows nothing about gestures.json
+  installUserGestures();
+  await win.webContents.executeJavaScript(`devatar.setGestures(${JSON.stringify(GESTURES)})`);
 
   let ffErr = "";
   const ff = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "png", "-i", "-", "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-row-mt", "1", "-threads", "8", "-speed", "3", "-b:v", "0", "-crf", "24", out]);

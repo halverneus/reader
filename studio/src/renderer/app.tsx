@@ -5,6 +5,7 @@ import { RecordView } from "./views/record";
 import { PostView } from "./views/post";
 import { SettingsView } from "./views/settings";
 import { VoiceView } from "./views/voice";
+import { GesturesView } from "./views/gestures";
 import { loadScriptFile } from "./script-io";
 
 const TABS: { id: Tab; label: string; key: string }[] = [
@@ -12,7 +13,8 @@ const TABS: { id: Tab; label: string; key: string }[] = [
   { id: "record", label: "Record", key: "2" },
   { id: "post", label: "Post", key: "3" },
   { id: "voice", label: "Voice", key: "4" },
-  { id: "settings", label: "Settings", key: "5" },
+  { id: "gestures", label: "Gestures", key: "5" },
+  { id: "settings", label: "Settings", key: "6" },
 ];
 
 export function App() {
@@ -26,7 +28,7 @@ export function App() {
     })();
     const offPlay = window.studio.on("tts:play", (b64: string) => { new Audio("data:audio/wav;base64," + b64).play().catch(() => {}); });
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && /^[1-5]$/.test(e.key)) { e.preventDefault(); setState({ tab: TABS[+e.key - 1].id }); }
+      if ((e.ctrlKey || e.metaKey) && /^[1-6]$/.test(e.key)) { e.preventDefault(); setState({ tab: TABS[+e.key - 1].id }); }
     };
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("keydown", onKey); offPlay(); };
@@ -47,6 +49,7 @@ export function App() {
         {s.tab === "record" && <RecordView />}
         {s.tab === "post" && <PostView />}
         {s.tab === "voice" && <VoiceView />}
+        {s.tab === "gestures" && <GesturesView />}
         {s.tab === "settings" && <SettingsView />}
       </main>
       {s.toast && <div class={"toast " + s.toast.kind + (s.toast.sticky ? " sticky" : "")} onClick={() => s.toast?.sticky && setState({ toast: null })} title={s.toast.sticky ? "Click to dismiss" : undefined}>{s.toast.msg}</div>}

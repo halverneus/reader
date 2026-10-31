@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
 import path from "node:path";
 import fs from "node:fs";
 import { loadConfig, saveConfig } from "./config";
+import { installUserGestures, loadUserGestures, saveUserGestures } from "../shared/gestures";
+import { BUILTIN_GESTURES } from "../../glitch/dev-hands-data";
 import { registerScriptIpc } from "./scripts";
 import { registerTtsIpc, pollKokoro, startKokoroContainer, stopKokoroContainer, kokoroState, pollDevVoice, startDevVoice, stopDevVoice } from "./tts";
 import { registerVmIpc } from "./vm";
@@ -42,7 +44,7 @@ function createWindow() {
     win.webContents.on("console-message", (_e, level, msg) => { if (level >= 2) process.stderr.write(`[renderer] ${msg}\n`); });
     win.webContents.on("did-finish-load", async () => {
       if (process.env.STUDIO_JS) { await new Promise((r) => setTimeout(r, 1500)); await win!.webContents.executeJavaScript(process.env.STUDIO_JS!).catch((e) => process.stderr.write(`[js] ${e.message}\n`)); }
-      if (process.env.STUDIO_TAB) await win!.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent("keydown",{key:"${{ script: 1, record: 2, post: 3, settings: 4 }[process.env.STUDIO_TAB!] ?? 1}",ctrlKey:true}))`).catch(() => {});
+      if (process.env.STUDIO_TAB) await win!.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent("keydown",{key:"${{ script: 1, record: 2, post: 3, voice: 4, gestures: 5, settings: 6 }[process.env.STUDIO_TAB!] ?? 1}",ctrlKey:true}))`).catch(() => {});
       await new Promise((r) => setTimeout(r, 2500));
       const img = await win!.webContents.capturePage();
       fs.writeFileSync(process.env.STUDIO_SHOT!, img.toPNG());
@@ -77,9 +79,14 @@ async function headless(): Promise<boolean> {
   return false;
 }
 
+installUserGestures();   // before anything renders or validates a script
+
 app.whenReady().then(async () => {
   if (await headless()) return;
   ipcMain.handle("config:get", () => loadConfig());
+  // the hand gestures he authors in the Gestures tab
+  ipcMain.handle("gestures:get", () => ({ builtin: BUILTIN_GESTURES, user: loadUserGestures() }));
+  ipcMain.handle("gestures:set", (_e, table) => saveUserGestures(table));
   ipcMain.handle("config:set", async (_e, patch) => {
     const before = loadConfig().capture.backend;
     const cfg = saveConfig(patch);

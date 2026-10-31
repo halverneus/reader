@@ -28,6 +28,10 @@ import { DEFAULTS, deepMerge, userDataDir, type Config } from "../shared/config"
 import { MOODS } from "../../glitch/moods";
 import { ask, readBridge } from "./bridge-client";
 import { serve, type Tool } from "./rpc";
+import { installUserGestures } from "../shared/gestures";
+
+// his own gestures count as known names in a [hand ...] tag
+installUserGestures();
 
 /** Run a command, optionally feeding stdin. execFile has no `input` option --
  *  that is execFileSync -- so this spawns and writes the pipe itself. */

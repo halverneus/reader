@@ -2,7 +2,7 @@
 // exactly the way glitch-page.ts is stepped, so the two stay in sync.
 import { DevRig, DevDriver } from "../../glitch/dev-rig";
 import { SHAPES } from "../../glitch/dev-hands";
-import { GESTURES } from "../../glitch/dev-hands-data";
+import { applyGestures, GESTURES } from "../../glitch/dev-hands-data";
 const svg = document.getElementById("dev") as unknown as SVGSVGElement;
 const q = new URLSearchParams(location.search);
 const rig = new DevRig(svg, {
@@ -25,6 +25,7 @@ requestAnimationFrame(loop);
   pose: (p: any) => driver.forcePose(p),
   shapes: () => Object.keys(SHAPES),
   gestures: () => GESTURES,
+  setGestures: (t: any) => applyGestures(t),
   step: (fps = 30, frame = 0) => { manual = true; rig.update(driver.tick(1 / fps), frame / fps, driver.gl); },
   frame: (): Promise<string> => new Promise((resolve, reject) => {
     const W = 1920, H = 1080;

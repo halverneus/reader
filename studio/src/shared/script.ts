@@ -1,7 +1,7 @@
 // Script model shared by main, renderer, and the post pipeline.
 // YAML format is the existing Metrik Rule Script.yml, extended with moods, face/slide cues and mouse steps.
 import yaml from "js-yaml";
-import { GESTURE_HOME, GESTURE_NAMES } from "../../glitch/dev-hands-data";
+import { GESTURE_HOME, gestureNames } from "../../glitch/dev-hands-data";
 import { MOOD_NAMES } from "../../glitch/moods";
 
 export type Actor = "Dev" | "Glitch";
@@ -301,7 +301,7 @@ export function validate(s: Script): { entryId: string; msg: string }[] {
       for (const l of e.text.split("\n")) if (l.length > 70) out.push({ entryId: e.id, msg: `line longer than 70 chars: "${l.slice(0, 30)}…"` });
       if (e.mood && !MOOD_NAMES.includes(e.mood)) out.push({ entryId: e.id, msg: `unknown mood "${e.mood}"` });
       for (const h of splitMoodTags(e.text).hands) {
-        if (h.hand !== GESTURE_HOME && !GESTURE_NAMES.includes(h.hand)) out.push({ entryId: e.id, msg: `unknown gesture "[hand ${h.hand}]" (have: ${[GESTURE_HOME, ...GESTURE_NAMES].join(", ")})` });
+        if (h.hand !== GESTURE_HOME && !gestureNames().includes(h.hand)) out.push({ entryId: e.id, msg: `unknown gesture "[hand ${h.hand}]" (have: ${[GESTURE_HOME, ...gestureNames()].join(", ")})` });
         else if (e.actor !== "Dev") out.push({ entryId: e.id, msg: `"[hand ${h.hand}]" is avatar Dev's arm; Glitch has no hands` });
       }
     }

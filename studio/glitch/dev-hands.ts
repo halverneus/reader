@@ -23,7 +23,7 @@
 // exactly when it mattered.
 import type { DevRig, DevState } from "./dev-rig";
 import { GESTURES, SVG_HANDS, type HandPose, type HandShape } from "./dev-hands-data";
-export { GESTURE_NAMES, GESTURES, gestureLength } from "./dev-hands-data";
+export { gestureNames, GESTURES, gestureLength } from "./dev-hands-data";
 export type { HandPose } from "./dev-hands-data";
 
 const NS = "http://www.w3.org/2000/svg";
