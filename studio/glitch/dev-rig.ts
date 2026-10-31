@@ -414,9 +414,10 @@ export class DevRig {
       this.inner.setAttribute("opacity", on ? String(0.75 + Math.random() * 0.25) : "1");
     } else { this.inner.removeAttribute("filter"); this.inner.setAttribute("opacity", "1"); }
 
-    // the arm, built the first time a gesture asks for it and kept after, so
-    // a script that never gestures carries none of it
-    if (s.gesture || this.hands) (this.hands ??= new DevHands(this)).update(s.gesture ?? null, s);
+    // The gesturing arm replaces the rig's own resting one for good, not just
+    // for the length of a gesture: handing over mid-shot made the arm blink.
+    // With no gesture running it draws the same limb at HOME.
+    (this.hands ??= new DevHands(this)).update(s.gesture ?? null, s);
   }
 }
 

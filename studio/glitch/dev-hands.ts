@@ -22,7 +22,7 @@
 // front of his chest. Putting the whole limb behind the tee hid the hand
 // exactly when it mattered.
 import type { DevRig, DevState } from "./dev-rig";
-import { GESTURES, SVG_HANDS, type HandPose, type HandShape } from "./dev-hands-data";
+import { GESTURES, HOME, SVG_HANDS, type HandPose, type HandShape } from "./dev-hands-data";
 export { gestureNames, GESTURES, gestureLength } from "./dev-hands-data";
 export type { HandPose } from "./dev-hands-data";
 
@@ -35,7 +35,11 @@ const lerpAngle = (a: number, b: number, t: number) => { const d = ((b - a) % 36
 
 // The joint sits one eyebrow length down and out at 35 degrees from the
 // sleeve cap, which puts it inside the tee rather than on its outer seam.
-const SHOULDER = { x: -204.3, y: 319.9 };
+// Nudged out by 4 units and the shoulder end widened to 130 so the resting
+// limb sits exactly where the rig's own arm did: now that this one is always
+// the arm on screen, it has to match the UNTOUCHED right arm or he comes out
+// lopsided. Measured against it rather than eyeballed.
+const SHOULDER = { x: -206.0, y: 319.9 };
 const UPPER_LEN = 353;                 // puts the elbow below the frame edge
 const ARM_STROKE = 3;                  // the rig's own line weight; hands match it
 
@@ -53,7 +57,10 @@ function limbGeom(x1: number, y1: number, x2: number, y2: number, w1: number, w2
   const b = bulge;
   const P = (t: number, off: number) => `${(x1 + ux * Ln * t + nx * off).toFixed(1)},${(y1 + uy * Ln * t + ny * off).toFixed(1)}`;
   const side = (sg: number) => `M${P(0, sg * w1 / 2)} C${P(0.30, sg * w1 / 2 * (1 + b))} ${P(0.72, sg * w2 / 2 * 1.06)} ${P(1, sg * w2 / 2)}`;
+  // the soft crease the rig draws down the outside of its own arms
+  const crease = `M${P(0.42, w1 * 0.34)} C${P(0.62, w1 * 0.33)} ${P(0.80, w2 * 0.33)} ${P(1, w2 * 0.31)}`;
   return {
+    crease,
     // closed, for the fill
     fill: `M${P(0, w1 / 2)} C${P(0.30, w1 / 2 * (1 + b))} ${P(0.72, w2 / 2 * 1.06)} ${P(1, w2 / 2)}` +
           ` L${P(1, -w2 / 2)} C${P(0.72, -w2 / 2 * 1.06)} ${P(0.30, -w1 / 2 * (1 + b))} ${P(0, -w1 / 2)}Z`,
@@ -110,7 +117,7 @@ export function sample(name: string, t: number): HandPose {
 }
 
 export class DevHands {
-  private upper: SVGElement; private foreFill: SVGElement; private fore: SVGElement;
+  private upper: SVGElement; private crease: SVGElement; private foreFill: SVGElement; private fore: SVGElement;
   private handG: SVGElement; private silG: SVGElement; private silh: SVGElement; private handInner: SVGElement;
   private backParts: SVGElement[] = []; private handParts: SVGElement[] = [];
   private shown = false;
@@ -119,6 +126,7 @@ export class DevHands {
     const backG = el("g", {}, rig.gestureLayer());
     const armG = el("g", {}, rig.gestureFrontLayer());
     this.upper = el("path", { "stroke-width": ARM_STROKE, "stroke-linejoin": "round" }, backG);
+    this.crease = el("path", { fill: "none", "stroke-width": 2, opacity: 0.3, "stroke-linecap": "round" }, backG);
     this.foreFill = el("path", { stroke: "none" }, armG);
     this.fore = el("path", { fill: "none", "stroke-width": ARM_STROKE, "stroke-linecap": "round" }, armG);
     this.handG = el("g", {}, armG);
@@ -137,18 +145,17 @@ export class DevHands {
   /** Draw the arm for this frame. `g` is null when no gesture is running, and
    *  the limb goes back to being the rig's own resting shape. */
   update(pose: HandPose | null, s: DevState) {
-    const live = !!pose;
-    if (live !== this.shown) {
-      this.shown = live;
-      // the rig draws its own resting arm on this side; ours replaces it
-      this.rig.showArm(-1, !live);
-      for (const e of [this.upper, this.foreFill, this.fore, this.handG]) e.setAttribute("display", live ? "inline" : "none");
-    }
-    if (!live) return;
+    // This arm is ALWAYS the one on screen, resting at HOME when nothing is
+    // playing. Swapping it in only for the length of a gesture meant the
+    // rig's own arm blinked out a frame before this one blinked in, which
+    // read as the arm going black just before it moved.
+    if (!this.shown) { this.shown = true; this.rig.showArm(-1, false); }
+    pose = pose ?? HOME;
 
     const e = elbowAt(pose!.ua);
-    const upper = limbGeom(SHOULDER.x, SHOULDER.y, e.x, e.y, 122, 100, 0.16);
+    const upper = limbGeom(SHOULDER.x, SHOULDER.y, e.x, e.y, 134, 96, 0.16);
     this.upper.setAttribute("d", upper.fill);
+    this.crease.setAttribute("d", upper.crease);
 
     const r = pose!.fa * Math.PI / 180;
     const wx = e.x + Math.sin(r) * pose!.len, wy = e.y - Math.cos(r) * pose!.len;
@@ -158,9 +165,19 @@ export class DevHands {
     this.foreFill.setAttribute("d", fore.fill);
     this.fore.setAttribute("d", fore.sides);
 
+    // The arm's colours, every frame. These used to sit below the early
+    // return, so a resting arm was drawn with no stroke at all and read as a
+    // black shape until the hand faded in.
+    const c = `rgb(${s.rgb.map(Math.round).join(",")})`;
+    const body = "#0c0f17";
+    this.upper.setAttribute("fill", body); this.upper.setAttribute("stroke", c);
+    this.crease.setAttribute("stroke", c);
+    this.foreFill.setAttribute("fill", body);
+    this.fore.setAttribute("stroke", c);
+
+    // `vis` is the HAND fading in, not the arm. The arm is always solid; at
+    // home it is simply below the bottom of the frame.
     this.handG.setAttribute("opacity", String(pose!.vis));
-    this.fore.setAttribute("opacity", String(pose!.vis));
-    this.foreFill.setAttribute("opacity", String(pose!.vis));
     if (pose!.vis <= 0.002) return;
     this.handG.setAttribute("transform", `translate(${wx},${wy}) rotate(${pose!.rot - pose!.fa}) scale(${pose!.scale})`);
 
@@ -171,11 +188,6 @@ export class DevHands {
     this.silG.setAttribute("transform", `${mirror}scale(${shp.k || 1})`);
     this.handInner.setAttribute("transform", mirror + (shp.tf || ""));
 
-    const c = `rgb(${s.rgb.map(Math.round).join(",")})`;
-    const body = "#0c0f17";
-    this.upper.setAttribute("fill", body); this.upper.setAttribute("stroke", c);
-    this.foreFill.setAttribute("fill", body);
-    this.fore.setAttribute("stroke", c);
     this.silh.setAttribute("fill", body);
 
     const lw = ARM_STROKE / ((shp.k || 1) * Math.max(0.01, pose!.scale));
