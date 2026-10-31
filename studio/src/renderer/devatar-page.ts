@@ -1,6 +1,8 @@
 // Standalone avatar-Dev page: the offline renderer steps it frame by frame,
 // exactly the way glitch-page.ts is stepped, so the two stay in sync.
 import { DevRig, DevDriver } from "../../glitch/dev-rig";
+import { SHAPES } from "../../glitch/dev-hands";
+import { GESTURES } from "../../glitch/dev-hands-data";
 const svg = document.getElementById("dev") as unknown as SVGSVGElement;
 const q = new URLSearchParams(location.search);
 const rig = new DevRig(svg, {
@@ -19,6 +21,10 @@ requestAnimationFrame(loop);
   talk: (v: boolean) => driver.setTalking(v),
   toGlitch: (v: boolean) => driver.setToGlitch(v),
   gesture: (n: string | null) => driver.playGesture(n),
+  // for the gesture editor only: pin one pose, and what shapes exist
+  pose: (p: any) => driver.forcePose(p),
+  shapes: () => Object.keys(SHAPES),
+  gestures: () => GESTURES,
   step: (fps = 30, frame = 0) => { manual = true; rig.update(driver.tick(1 / fps), frame / fps, driver.gl); },
   frame: (): Promise<string> => new Promise((resolve, reject) => {
     const W = 1920, H = 1080;

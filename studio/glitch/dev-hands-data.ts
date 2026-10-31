@@ -33,27 +33,94 @@ export const SVG_HANDS: Record<string, HandShape> = {
 
 export interface HandPose { ua: number; fa: number; len: number; rot: number; scale: number; shape: string; vis: number; flip?: boolean }
 
+/** HOME is off frame: the arm hangs straight down out of the bottom of the
+ *  shot. Every gesture starts and ends here, so one can follow another
+ *  without anything having to remember where the hand was left. */
+export const HOME: HandPose = { ua: 2, fa: 85, len: 390, rot: 120, scale: 1.6, shape: "soft", vis: 0 };
+
+/** A gesture is a list of keyframes from HOME and back to it.
+ *
+ *  `hold` is the index of the keyframe to STOP at. The hand stays in that
+ *  pose until something else is asked for: that is what makes "hold up two
+ *  fingers" a state rather than a two-second animation. The keyframes after
+ *  it are the way back, and they only play when the gesture is released.
+ *  Without `hold` the whole thing plays through and the arm puts itself away,
+ *  which is what the greeting and the sign-off do.
+ *
+ *  Switching from one held gesture to another does NOT go home in between:
+ *  the pose tweens straight across and the hand shape swaps at the halfway
+ *  point, because fingers cannot interpolate into other fingers. */
+export interface Gesture {
+  /** What it is for, in his words. Shown in the editor and in `mscript doc`. */
+  label: string;
+  hold?: number;
+  keys: { t: number; p: HandPose }[];
+}
+
 /** Jeromy's numbers, tuned against his own footage 2026-10-30. Times are
  *  seconds from the start of the line the gesture is attached to. */
-export const GESTURES: Record<string, { t: number; p: HandPose }[]> = {
-  greeting: [
-    { t: 0,   p: { ua: 2,  fa: 85, len: 390, rot: 120, scale: 1.96, shape: "palm", vis: 0 } },
-    { t: 0.3, p: { ua: 18, fa: -8, len: 390, rot: -16, scale: 2.45, shape: "palm", vis: 1 } },
-    { t: 0.6, p: { ua: 18, fa: -7, len: 390, rot: -16, scale: 2.45, shape: "palm", vis: 1 } },
-    { t: 1.7, p: { ua: 18, fa: 49, len: 390, rot: 98,  scale: 2.14, shape: "flat", vis: 1, flip: false } },
-    { t: 2.2, p: { ua: 18, fa: 49, len: 390, rot: 98,  scale: 2.14, shape: "flat", vis: 1, flip: false } },
-    { t: 3.7, p: { ua: 2,  fa: 85, len: 390, rot: 180, scale: 1.6,  shape: "soft", vis: 1 } },
-    { t: 4.3, p: { ua: 2,  fa: 85, len: 390, rot: 120, scale: 1.6,  shape: "soft", vis: 0 } },
-  ],
-  signoff: [
-    { t: 0,    p: { ua: 2,    fa: 85,   len: 390, rot: 120,  scale: 1.6,   shape: "point", vis: 0 } },
-    { t: 0.4,  p: { ua: 9,    fa: 25,   len: 316, rot: 29,   scale: 1.6,   shape: "point", vis: 1, flip: false } },
-    { t: 0.9,  p: { ua: 18,   fa: -4,   len: 390, rot: -10,  scale: 2.67,  shape: "point", vis: 1, flip: false } },
-    { t: 2.6,  p: { ua: 6.57, fa: 59.6, len: 390, rot: 82.9, scale: 1.841, shape: "point", vis: 1, flip: false } },
-    { t: 3.2,  p: { ua: 2,    fa: 85,   len: 390, rot: 120,  scale: 1.51,  shape: "point", vis: 0, flip: false } },
-  ],
+export const GESTURES: Record<string, Gesture> = {
+  greeting: {
+    label: "The opening wave: palm forward on \u201cGreetings!\u201d, then the same hand to his chest on \u201cI'm Dev the Developer\u201d.",
+    keys: [
+      { t: 0,   p: { ua: 2,  fa: 85, len: 390, rot: 120, scale: 1.96, shape: "palm", vis: 0 } },
+      { t: 0.3, p: { ua: 18, fa: -8, len: 390, rot: -16, scale: 2.45, shape: "palm", vis: 1 } },
+      { t: 0.6, p: { ua: 18, fa: -7, len: 390, rot: -16, scale: 2.45, shape: "palm", vis: 1 } },
+      { t: 1.7, p: { ua: 18, fa: 49, len: 390, rot: 98,  scale: 2.14, shape: "flat", vis: 1, flip: false } },
+      { t: 2.2, p: { ua: 18, fa: 49, len: 390, rot: 98,  scale: 2.14, shape: "flat", vis: 1, flip: false } },
+      { t: 3.7, p: { ua: 2,  fa: 85, len: 390, rot: 180, scale: 1.6,  shape: "soft", vis: 1 } },
+      { t: 4.3, p: { ua: 2,  fa: 85, len: 390, rot: 120, scale: 1.6,  shape: "soft", vis: 0 } },
+    ],
+  },
+  // Timed against the line as his cloned voice actually says it, measured off
+  // the wav rather than guessed: 0.76 s of lead-in silence, "Don't just watch
+  // it" to 1.62, the "..." to 2.02, "Do it!" to 2.40, then tail. So the hand
+  // comes up through the gap and the point LANDS on "Do it!". It stays HOME
+  // for the first 1.25 s: earlier than that and he is winding up before he
+  // has said the first half of the line.
+  signoff: {
+    label: "The closing point down the lens on \u201cDo it!\u201d, after \u201cDon't just watch it\u201d.",
+    keys: [
+      { t: 0,    p: { ua: 2,    fa: 85,   len: 390, rot: 120,  scale: 1.6,   shape: "point", vis: 0 } },
+      { t: 1.25, p: { ua: 2,    fa: 85,   len: 390, rot: 120,  scale: 1.6,   shape: "point", vis: 0 } },
+      { t: 1.70, p: { ua: 9,    fa: 25,   len: 316, rot: 29,   scale: 1.6,   shape: "point", vis: 1, flip: false } },
+      { t: 2.00, p: { ua: 18,   fa: -4,   len: 390, rot: -10,  scale: 2.67,  shape: "point", vis: 1, flip: false } },
+      { t: 2.45, p: { ua: 18,   fa: -4,   len: 390, rot: -10,  scale: 2.67,  shape: "point", vis: 1, flip: false } },
+      { t: 2.80, p: { ua: 6.57, fa: 59.6, len: 390, rot: 82.9, scale: 1.841, shape: "point", vis: 1, flip: false } },
+      { t: 3.15, p: { ua: 2,    fa: 85,   len: 390, rot: 120,  scale: 1.51,  shape: "point", vis: 0, flip: false } },
+    ],
+  },
 };
 
+/** Counting and the other held shapes. Same three keyframes every time --
+ *  home, the shape, home -- so they are quick to add and quick to retime.
+ *  These are starting positions; the editor is where they get dialled in. */
+const held = (label: string, shape: string, p: Partial<HandPose> = {}, inS = 0.5, outS = 1.0): Gesture => ({
+  label, hold: 1,
+  keys: [
+    { t: 0, p: { ...HOME } },
+    { t: inS, p: { ua: 16, fa: 18, len: 360, rot: 8, scale: 1.9, shape, vis: 1, flip: false, ...p } },
+    { t: inS + outS, p: { ...HOME } },
+  ],
+});
+Object.assign(GESTURES, {
+  one:   held("One finger up, for counting off the first of something.", "one_up"),
+  two:   held("Two fingers up, for the second of something.", "two_up"),
+  three: held("Three fingers up.", "three_up"),
+  four:  held("Four fingers up.", "four_up"),
+  open:  held("Open palm up, offered: \u201cso to speak\u201d, \u201cthere you go\u201d.", "palm", { rot: 40, fa: 34 }),
+  flat:  held("Flat hand, held level: steady, settled, \u201cthat is the rule\u201d.", "flat", { rot: 70, fa: 40 }),
+  up:    held("One finger raised and held: \u201cnote this\u201d, \u201cthe important bit\u201d.", "point_up", { rot: -6, fa: 6, scale: 2.0 }),
+});
+
 export const GESTURE_NAMES = Object.keys(GESTURES);
-/** How long a gesture runs, so the driver knows when to put the arm away. */
-export const gestureLength = (name: string) => GESTURES[name]?.at(-1)?.t ?? 0;
+/** The reserved name that releases whatever is held and puts the arm away. */
+export const GESTURE_HOME = "home";
+/** How long a gesture runs end to end. A held one never gets there on its
+ *  own, so the driver asks `holdAt` instead. */
+export const gestureLength = (name: string) => GESTURES[name]?.keys.at(-1)?.t ?? 0;
+/** When a held gesture stops and waits, or null if it plays straight through. */
+export const holdAt = (name: string): number | null => {
+  const g = GESTURES[name];
+  return g && g.hold != null ? g.keys[g.hold]?.t ?? null : null;
+};

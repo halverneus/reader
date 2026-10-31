@@ -16,7 +16,8 @@
 // a puppet, so every expression rotates the head alone, about a pivot at the
 // mouth: a turn about a low point swings the crown and barely moves the chin,
 // which is what keeps the jaw sitting in the collar.
-import { DevHands, gestureLength } from "./dev-hands";
+import { DevHands, blend, sample, type HandPose } from "./dev-hands";
+import { GESTURES, GESTURE_HOME, gestureLength, holdAt } from "./dev-hands-data";
 import { BASE, Expr, hexToRgb, moodExpr } from "./moods";
 import { GlitchDriver } from "./vex";
 
@@ -28,9 +29,9 @@ const rgb = (c: number[]) => `rgb(${c.map(Math.round).join(",")})`;
 const mix = (c: number[], t: number[], k: number) => c.map((v, i) => lerp(v, t[i], k));
 /** sRGB-ish lift toward a target, for the one or two colors picked by eye. */
 
-/** `gesture` is the arm: which move is running and how far into it, in
- *  seconds. Absent means the arm is at rest and the rig draws its own. */
-export interface DevState extends Expr { rgb: [number, number, number]; blink: number; talkOpen: number; gesture?: { name: string; t: number } }
+/** `gesture` is the pose the arm is in this frame, already blended. Absent
+ *  means the arm is at rest and the rig draws its own. */
+export interface DevState extends Expr { rgb: [number, number, number]; blink: number; talkOpen: number; gesture?: HandPose }
 
 // ── his proportions, from the fit. Ratios, not guesses. ─────────────────────
 const H = 250;                                   // brow top to chin
@@ -444,28 +445,92 @@ function defs(svg: SVGSVGElement) {
 export class DevDriver {
   private g: GlitchDriver;
   gl = 0; toGlitch = false;
-  private gname: string | null = null; private gt = 0;
   constructor(seed = 7) { this.g = new GlitchDriver(seed); }
-  /** Start a hand gesture. It runs on its own clock from here and puts the
-   *  arm away by itself, so nothing has to remember to stop it. */
-  playGesture(name: string | null) { this.gname = name; this.gt = 0; }
   get mood() { return this.g.mood; }
   /** The state as last ticked. Read-only; anything drawing alongside the rig
    *  (a gesture layer, an overlay) needs the current mood colour. */
   get cur(): DevState { return (this.g as any).cur as DevState; }
+  // ── the arm ──────────────────────────────────────────────────────────
+  // A gesture is keyframes from home and back. A HELD one stops at its hold
+  // keyframe and stays there until something else is asked for; asking for
+  // another one tweens straight across from wherever the hand is, rather
+  // than dropping home and coming back up, which would read as a stutter.
+  private gname: string | null = null;    // what is playing or held
+  private gt = 0;                         // seconds into it
+  private tweenFrom: HandPose | null = null;   // a cross-fade between two holds
+  private tweenTo: HandPose | null = null;
+  private tweenT = 0; private tweenDur = 0;
+  private tweenName: string | null = null;     // what we land on when it ends
+  private pose: HandPose | null = null;        // what was drawn last frame
+
+  /** Start a gesture. `null` or "home" releases whatever is held. */
+  playGesture(name: string | null) {
+    const next = name && name !== GESTURE_HOME && GESTURES[name] ? name : null;
+    if (next && next === this.gname && this.tweenName == null) return;  // already there
+    const out = this.pose && this.pose.vis > 0.01;                      // hand currently on screen
+    const hold = next ? holdAt(next) : null;
+
+    if (next && hold != null && out) {
+      // hand is already up: cross over to the new shape in place
+      this.tweenFrom = this.pose!; this.tweenTo = sample(next, hold);
+      this.tweenT = 0; this.tweenDur = Math.max(.08, hold);
+      this.tweenName = next; this.gname = next; this.gt = hold;
+      return;
+    }
+    if (!next && this.gname && holdAt(this.gname) != null) {
+      // release: run the rest of the held gesture's keys, which are its way home
+      this.gt = Math.max(this.gt, holdAt(this.gname)!);
+      this.released = true;
+      this.tweenFrom = this.tweenTo = this.tweenName = null;
+      return;
+    }
+    this.tweenFrom = this.tweenTo = this.tweenName = null;
+    this.released = false;
+    this.gname = next; this.gt = 0;
+  }
+
+  /** Pin the arm to one pose and stop the clock. The gesture editor needs
+   *  this to dial a single keyframe in; nothing in a recording uses it. */
+  forcePose(p: HandPose | null) { this.forced = p; }
+  private forced: HandPose | null = null;
+
+  /** The pose for this frame, or null when the arm is away and the rig
+   *  should draw its own. */
+  private tickArm(dt: number): HandPose | null {
+    if (this.forced) return (this.pose = this.forced);
+    if (this.tweenTo) {
+      this.tweenT += dt;
+      const u = Math.min(1, this.tweenT / this.tweenDur);
+      this.pose = blend(this.tweenFrom!, this.tweenTo, u < .5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2);
+      if (u >= 1) { this.tweenFrom = this.tweenTo = this.tweenName = null; }
+      return this.pose;
+    }
+    if (!this.gname) { this.pose = null; return null; }
+    const hold = holdAt(this.gname);
+    this.gt += dt;
+    // a held gesture waits at its hold keyframe until it is released
+    if (hold != null && this.gt > hold && !this.released) this.gt = hold;
+    if (this.gt > gestureLength(this.gname)) { this.gname = null; this.released = false; this.pose = null; return null; }
+    this.pose = sample(this.gname, this.gt);
+    return this.pose;
+  }
+  private released = false;
+
   setMood(m: string, hold?: number) { this.g.setMood(m, hold); }
   setTalking(v: boolean) { this.g.setTalking(v); }
   setToGlitch(v: boolean) { this.toGlitch = v; }
   tick(dt: number): DevState {
     const s = this.g.tick(dt) as unknown as DevState;
     this.gl = lerp(this.gl, this.toGlitch ? 1 : 0, 1 - Math.pow(0.004, dt));
-    if (this.gname) {
-      this.gt += dt;
-      if (this.gt > gestureLength(this.gname)) this.gname = null;
-      else s.gesture = { name: this.gname, t: this.gt };
-    }
+    s.gesture = this.tickArm(dt) ?? undefined;
     return s;
   }
+}
+
+/** How long the last leg of a gesture takes: the way back home. */
+function lastLeg(name: string): number {
+  const k = GESTURES[name]?.keys; if (!k || k.length < 2) return .8;
+  return k[k.length - 1].t - k[k.length - 2].t;
 }
 
 export { BASE, moodExpr, hexToRgb };

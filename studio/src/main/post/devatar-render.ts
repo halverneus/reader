@@ -40,14 +40,19 @@ export async function renderDevatar(dir: string, session: any, log: Log): Promis
 
   type Cue = { t: number; mood?: string; hold?: number; talk?: boolean; toGlitch?: boolean; gesture?: string | null };
   const cues: Cue[] = [];
+  const glitchLines = new Set<string>(session.events.filter((e: any) => e.kind === "line-start" && e.actor === "Glitch").map((e: any) => e.entryId));
   for (const e of session.events) {
     const t = (e.t - t0) / 1000;
     if (e.kind === "mood" && e.actor === "Dev") cues.push({ t, mood: e.mood, hold: e.hold });
     else if (e.kind === "gesture" && e.actor === "Dev") cues.push({ t, gesture: e.name });
-    // the handover wears the glitch mood: it is something being done TO him
-    else if (e.kind === "avatar") cues.push({ t, mood: "glitch" });
+    // The handover wears the glitch mood: it is something being done TO him.
+    // It has to last the whole dissolve, or it is over before he is visible.
+    else if (e.kind === "avatar") cues.push({ t, mood: "glitch", hold: e.burst ?? (e.over ?? 1200) + 1100 });
     else if (e.kind === "line-start" && e.actor === "Glitch") cues.push({ t, toGlitch: true });
-    else if (e.kind === "line-end" && e.actor === "Glitch") cues.push({ t, toGlitch: false });
+    // `line-end` carried no actor until 2026-10-31, so the gaze could never be
+    // turned back off and he stared at Glitch for whole lessons. Older takes
+    // are repaired here by matching the line it ends.
+    else if (e.kind === "line-end" && (e.actor === "Glitch" || (!e.actor && glitchLines.has(e.entryId)))) cues.push({ t, toGlitch: false });
     else if (e.kind === "reset") cues.push({ t, mood: "neutral", toGlitch: false, talk: false, gesture: null });
   }
   // the mouth. Machine-read Dev lines carry their own duration and their

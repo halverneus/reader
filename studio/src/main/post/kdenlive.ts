@@ -472,6 +472,19 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
     if (cCam) {
       const inC = inOf(p.src0 + camOffset);
       const filters: string[] = []; if (cCam.file !== devAlpha) filters.push(chromaFilter(inC, cfg.capture.key)); if (keys.length) filters.push(rectFilter(keys.map((k) => ({ ...k, at: k.at + inC }))));
+      // The camera is the exact inverse of the avatar: one dissolves into the
+      // other. Without this the real Dev simply stopped existing the instant
+      // his file ended, which is a cut, not a hand-over.
+      if (cAvatar && swaps.length) {
+        const kc: [number, number][] = [[inC, 1 - avatarAt(p.src0)]];
+        for (const sw of swaps) {
+          if (sw.t + sw.over < p.src0 || sw.t > p.src1) continue;
+          const f0 = inC + Math.round(fr(sw.t - p.src0) / (speed ?? 1));
+          kc.push([f0, 1 - avatarAt(sw.t)], [f0 + Math.round(fr(sw.over) / (speed ?? 1)), 1 - sw.to]);
+        }
+        kc.push([inC + len - 1, 1 - avatarAt(p.src1)]);
+        filters.push(alphaKeys(kc.sort((a, b) => a[0] - b[0])));
+      }
       // the camera file ends at the avatar swap on an episode that never comes
       // back to it, so the clip is only as long as there is footage
       const camLen = Math.max(0, Math.min(len, cCam.frames - inC));

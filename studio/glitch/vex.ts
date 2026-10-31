@@ -184,7 +184,10 @@ export class GlitchDriver {
     if (!MOODS[name]) return;
     if (holdMs && holdMs > 0) { this.holdReturn = this.mood === name ? "neutral" : this.mood; this.holdUntil = this.t + holdMs / 1000; } else this.holdUntil = -1;
     this.mood = name; const e = moodExpr(name); this.target = { ...e, rgb: hexToRgb(e.color) };
-    if (name === "glitch") this.glitchBurstUntil = this.t + .9;
+    // A glitch burst is a flicker by default. Given an explicit hold it runs
+    // for the whole hold instead: the avatar cross-fade is longer than .9 s,
+    // so a fixed burst was over before there was anything on screen to see it.
+    if (name === "glitch") this.glitchBurstUntil = this.t + (holdMs && holdMs > 0 ? holdMs / 1000 : .9);
   }
   setTalking(v: boolean) { this.talking = v; }
   slide(to: "top" | "bottom" | "hide" | "show" | number, overMs = 600) {

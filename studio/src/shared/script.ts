@@ -1,7 +1,7 @@
 // Script model shared by main, renderer, and the post pipeline.
 // YAML format is the existing Metrik Rule Script.yml, extended with moods, face/slide cues and mouse steps.
 import yaml from "js-yaml";
-import { GESTURE_NAMES } from "../../glitch/dev-hands-data";
+import { GESTURE_HOME, GESTURE_NAMES } from "../../glitch/dev-hands-data";
 import { MOOD_NAMES } from "../../glitch/moods";
 
 export type Actor = "Dev" | "Glitch";
@@ -301,7 +301,7 @@ export function validate(s: Script): { entryId: string; msg: string }[] {
       for (const l of e.text.split("\n")) if (l.length > 70) out.push({ entryId: e.id, msg: `line longer than 70 chars: "${l.slice(0, 30)}…"` });
       if (e.mood && !MOOD_NAMES.includes(e.mood)) out.push({ entryId: e.id, msg: `unknown mood "${e.mood}"` });
       for (const h of splitMoodTags(e.text).hands) {
-        if (!GESTURE_NAMES.includes(h.hand)) out.push({ entryId: e.id, msg: `unknown gesture "[hand ${h.hand}]" (have: ${GESTURE_NAMES.join(", ")})` });
+        if (h.hand !== GESTURE_HOME && !GESTURE_NAMES.includes(h.hand)) out.push({ entryId: e.id, msg: `unknown gesture "[hand ${h.hand}]" (have: ${[GESTURE_HOME, ...GESTURE_NAMES].join(", ")})` });
         else if (e.actor !== "Dev") out.push({ entryId: e.id, msg: `"[hand ${h.hand}]" is avatar Dev's arm; Glitch has no hands` });
       }
     }
@@ -344,12 +344,27 @@ export function rewrapEntry(e: Entry): Entry {
   return e;
 }
 const joinNames = (n: string[]) => n.length <= 1 ? n.join("") : n.length === 2 ? `${n[0]} and ${n[1]}` : `${n.slice(0, -1).join(", ")}, and ${n[n.length - 1]}`;
+
+/** How the credits names are SPOKEN. The cards keep the real spelling; only
+ *  the line Glitch reads is respelled, because the synthesiser gets these
+ *  wrong every time and the early lessons each carried a hand-written
+ *  `phases:` override to work around it. One of them was forgotten on a week
+ *  seven script and the names came out mangled in the finished video. */
+export const SPOKEN_NAMES: Record<string, string> = {
+  krahs: "Cross", raquel: "Rackelle", ziath: "Zye-ith", clem: "Klem",
+};
+/** "Ziath & Clem" is one credit card but two people to thank out loud. */
+function spokenNames(names: string[]): string[] {
+  return names.flatMap((n) => n.split(/\s*(?:&|\band\b)\s*/))
+    .map((n) => n.trim()).filter(Boolean)
+    .map((n) => SPOKEN_NAMES[n.toLowerCase()] ?? n);
+}
 /** Fill in defaults so the production engine, the renderer and the editor all see the same phases. */
 export function outroPhases(e: OutroEntry): ResolvedPhase[] {
   const names = (e.thanks ?? []).map((s) => s.trim()).filter(Boolean);
   const defaults: Record<OutroPhaseName, Omit<ResolvedPhase, "phase">> = {
     thanks: { title: "THANKS", subtitle: "FOR WATCHING", names: [], text: "And that is the lesson. Thanks for watching!", mood: "excited", minMs: 3600 },
-    credits: { title: "WITH THANKS TO", subtitle: "", names, text: names.length ? wrap70(`A huge thank you to ${joinNames(names)} for making this possible.`) : "", mood: "proud", minMs: Math.max(4000, 1500 + names.length * 1100) },
+    credits: { title: "WITH THANKS TO", subtitle: "", names, text: names.length ? wrap70(`A huge thank you to ${joinNames(spokenNames(names))} for making this possible.`) : "", mood: "proud", minMs: Math.max(4000, 1500 + names.length * 1100) },
     next: { title: "NEXT LESSON", subtitle: e.next ?? "", names: [], text: e.next ? wrap70(`Next time we cover ${e.next}. Will I finally learn enough to escape this sandbox? [deception] Let's find out.`) : "", mood: "curious", minMs: 4800 },
     subscribe: { title: "SUBSCRIBE", subtitle: "Ring the bell. Glitch will find you either way.", names: [], text: "Subscribe so you don't miss it. [innocent] I certainly won't.", mood: "humor", minMs: 4200 },
   };

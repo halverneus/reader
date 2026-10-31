@@ -78,20 +78,28 @@ export const SHAPES: Record<string, HandShape> = { ...SVG_HANDS, soft: SVG_HANDS
 
 const REST: HandPose = { ua: 30, fa: 210, len: 430, rot: 0, scale: 1, shape: "soft", vis: 0 };
 
-function sample(name: string, t: number): HandPose {
-  const k = GESTURES[name];
-  if (!k) return REST;
+/** Blend two poses. Shapes TOGGLE at the halfway point rather than tween:
+ *  one finger cannot morph into two, so it swaps while the hand is moving
+ *  and nobody sees the join. */
+export function blend(a: HandPose, b: HandPose, u: number): HandPose {
+  return {
+    ua: lerp(a.ua, b.ua, u), fa: lerp(a.fa, b.fa, u), len: lerp(a.len, b.len, u),
+    rot: lerpAngle(a.rot, b.rot, u), scale: lerp(a.scale, b.scale, u),
+    shape: u < 0.5 ? a.shape : b.shape, flip: u < 0.5 ? a.flip : b.flip,
+    vis: lerp(a.vis, b.vis, u),
+  };
+}
+
+/** The pose a gesture is in `t` seconds after it started. */
+export function sample(name: string, t: number): HandPose {
+  const g = GESTURES[name];
+  if (!g) return REST;
+  const k = g.keys;
   if (t <= k[0].t) return k[0].p;
   for (let i = 1; i < k.length; i++) {
     if (t <= k[i].t) {
-      const a = k[i - 1], b = k[i], u = ease((t - a.t) / Math.max(1e-6, b.t - a.t));
-      return {
-        ua: lerp(a.p.ua, b.p.ua, u), fa: lerp(a.p.fa, b.p.fa, u), len: lerp(a.p.len, b.p.len, u),
-        rot: lerpAngle(a.p.rot, b.p.rot, u), scale: lerp(a.p.scale, b.p.scale, u),
-        // fingers do not interpolate into other fingers: shapes toggle
-        shape: u < 0.5 ? a.p.shape : b.p.shape, flip: u < 0.5 ? a.p.flip : b.p.flip,
-        vis: lerp(a.p.vis, b.p.vis, u),
-      };
+      const a = k[i - 1], b = k[i];
+      return blend(a.p, b.p, ease((t - a.t) / Math.max(1e-6, b.t - a.t)));
     }
   }
   return k[k.length - 1].p;
@@ -124,8 +132,8 @@ export class DevHands {
 
   /** Draw the arm for this frame. `g` is null when no gesture is running, and
    *  the limb goes back to being the rig's own resting shape. */
-  update(g: { name: string; t: number } | null, s: DevState) {
-    const live = !!g && GESTURES[g.name] != null;
+  update(pose: HandPose | null, s: DevState) {
+    const live = !!pose;
     if (live !== this.shown) {
       this.shown = live;
       // the rig draws its own resting arm on this side; ours replaces it
@@ -134,27 +142,26 @@ export class DevHands {
     }
     if (!live) return;
 
-    const pose = sample(g!.name, g!.t);
-    const e = elbowAt(pose.ua);
+    const e = elbowAt(pose!.ua);
     const upper = limbGeom(SHOULDER.x, SHOULDER.y, e.x, e.y, 122, 100, 0.16);
     this.upper.setAttribute("d", upper.fill);
 
-    const r = pose.fa * Math.PI / 180;
-    const wx = e.x + Math.sin(r) * pose.len, wy = e.y - Math.cos(r) * pose.len;
-    const shp = SHAPES[pose.shape] ?? SHAPES.palm;
-    const wristW = shp.wrist * pose.scale;         // the arm ends as wide as the hand starts
+    const r = pose!.fa * Math.PI / 180;
+    const wx = e.x + Math.sin(r) * pose!.len, wy = e.y - Math.cos(r) * pose!.len;
+    const shp = SHAPES[pose!.shape] ?? SHAPES.palm;
+    const wristW = shp.wrist * pose!.scale;         // the arm ends as wide as the hand starts
     const fore = limbGeom(e.x, e.y, wx, wy, 100, wristW, 0.10);
     this.foreFill.setAttribute("d", fore.fill);
     this.fore.setAttribute("d", fore.sides);
 
-    this.handG.setAttribute("opacity", String(pose.vis));
-    this.fore.setAttribute("opacity", String(pose.vis));
-    this.foreFill.setAttribute("opacity", String(pose.vis));
-    if (pose.vis <= 0.002) return;
-    this.handG.setAttribute("transform", `translate(${wx},${wy}) rotate(${pose.rot - pose.fa}) scale(${pose.scale})`);
+    this.handG.setAttribute("opacity", String(pose!.vis));
+    this.fore.setAttribute("opacity", String(pose!.vis));
+    this.foreFill.setAttribute("opacity", String(pose!.vis));
+    if (pose!.vis <= 0.002) return;
+    this.handG.setAttribute("transform", `translate(${wx},${wy}) rotate(${pose!.rot - pose!.fa}) scale(${pose!.scale})`);
 
     // the sheet is drawn as a camera-RIGHT hand; this arm is camera left
-    const mirror = pose.flip === false ? "" : "scale(-1,1) ";
+    const mirror = pose!.flip === false ? "" : "scale(-1,1) ";
     this.silh.setAttribute("d", shp.sil ?? "");
     this.silh.setAttribute("display", shp.sil ? "inline" : "none");
     this.silG.setAttribute("transform", `${mirror}scale(${shp.k || 1})`);
@@ -167,7 +174,7 @@ export class DevHands {
     this.fore.setAttribute("stroke", c);
     this.silh.setAttribute("fill", body);
 
-    const lw = ARM_STROKE / ((shp.k || 1) * Math.max(0.01, pose.scale));
+    const lw = ARM_STROKE / ((shp.k || 1) * Math.max(0.01, pose!.scale));
     this.build(shp.parts.length);
     shp.parts.forEach((q, i) => {
       // the backing is the same stroke fattened, in the body colour: it stops

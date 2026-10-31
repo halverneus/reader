@@ -127,9 +127,13 @@ class Production {
         // is "live" and put the avatar into the glitch mood for the handover,
         // which is what sells the swap as something being done TO him.
         const over = e.over ?? 1200;
-        devatar.setMood("glitch");
+        // Hold it across the dissolve and a beat past it. A bare setMood
+        // flickers for .9 s, which ends before he has faded up far enough to
+        // be seen doing it.
+        const burst = over + 1100;
+        devatar.setMood("glitch", burst);
         this.set({ avatar: e.to === "avatar" });
-        this.log("avatar", { to: e.to, over });
+        this.log("avatar", { to: e.to, over, burst });
         // Let the dissolve finish before the next marker fires, or the first
         // avatar beat lands while he is still half camera.
         if (e.to === "avatar") waits.push(new Promise<void>((r) => this.cueTimers.push(window.setTimeout(r, over))));
@@ -273,7 +277,7 @@ class Production {
         this.scheduleCues(e.text, dur, res.spans, e.actor === "Glitch");
       };
       a.onplaying = onStart;
-      a.onended = () => { onStart(); glitch.setTalking(false); devatar.setTalking(false); devatar.setToGlitch(false); this.log("line-end", { entryId: e.id }); if (this.audio === a) { this.audio = null; this.set({ speakingId: null }); } resolve(); };
+      a.onended = () => { onStart(); glitch.setTalking(false); devatar.setTalking(false); devatar.setToGlitch(false); this.log("line-end", { entryId: e.id, actor: e.actor }); if (this.audio === a) { this.audio = null; this.set({ speakingId: null }); } resolve(); };
       a.onerror = () => { glitch.setTalking(false); resolve(); };
       a.onpause = () => { if (a.ended) return; resolve(); };
       a.play().then(onStart).catch(() => resolve());

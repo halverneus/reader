@@ -7,7 +7,7 @@ import { verbless, runup, checkText, COURSEWORK, errorsOf } from "../shared/chec
 import { Editor, replayText, SUSPICIOUS } from "../shared/wb";
 import { keyStatus } from "../shared/keys";
 import { cameraPlan, parseScript, serializeScript, splitMoodTags, speechChunks, validate, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
-import { GESTURE_NAMES, gestureLength } from "../../glitch/dev-hands-data";
+import { GESTURES, GESTURE_NAMES, gestureLength, holdAt } from "../../glitch/dev-hands-data";
 import { markerDiff } from "../shared/diff";
 import { crossRepeats } from "../shared/across";
 import { MOODS, MOOD_NAMES } from "../../glitch/moods";
@@ -790,6 +790,8 @@ group("avatar Dev's hands");
   ok(validate(parseScript(line("Dev", "[hand greeting] Hello.")).script).length === 0, "a known gesture on a Dev line is clean");
   ok(validate(parseScript(line("Dev", "[hand waggle] Hello.")).script).some((x) => /unknown gesture/.test(x.msg)), "an invented gesture is flagged");
   ok(validate(parseScript(line("Glitch", "[hand greeting] Hello.")).script).some((x) => /no hands/.test(x.msg)), "Glitch cannot gesture");
+  ok(validate(parseScript(line("Dev", "[hand home] Hello.")).script).length === 0, "[hand home] is the reserved release and is always valid");
+  ok(validate(parseScript(line("Dev", "[hand two] Second.")).script).length === 0, "a counting gesture is valid");
 
   // a Dev face is the avatar's own; rebuilding the entry used to silently
   // hand it to Glitch, which is a change nobody would see until the render
@@ -806,6 +808,21 @@ group("avatar Dev's hands");
   ok(GESTURE_NAMES.includes("greeting") && GESTURE_NAMES.includes("signoff"), "both of his standing moves are present");
   ok(gestureLength("greeting") > 3 && gestureLength("signoff") > 3, "each runs long enough to cover its line");
   ok(gestureLength("nope") === 0, "an unknown gesture has no length, so it never holds the arm up");
+
+  // the counting shapes and the other held states
+  ok(holdAt("greeting") === null && holdAt("signoff") === null, "the two timed clips play straight through");
+  ok(holdAt("one") != null && holdAt("two") != null, "counting gestures stop and wait instead");
+  for (const [name, g] of Object.entries(GESTURES)) {
+    const k = g.keys;
+    ok(k.length >= 2, `${name} has keyframes`);
+    ok(k.every((x, i) => i === 0 || x.t > k[i - 1].t), `${name}'s keyframes move forward in time`);
+    ok(k[0].p.vis === 0 && k[k.length - 1].p.vis === 0, `${name} starts and ends off frame`);
+    if (g.hold != null) {
+      ok(g.hold > 0 && g.hold < k.length - 1, `${name}'s hold is a middle keyframe, with a way back after it`);
+      ok(k[g.hold].p.vis > 0, `${name} holds with the hand actually visible`);
+    }
+    ok(g.label.length > 10, `${name} says what it is for`);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -33,7 +33,7 @@ kinds and their json fields:
   slide    {"actor":"Dev|Glitch","to":"left|right|top|bottom|hide|show","over":600?}
   avatar   {"to":"avatar|real","over":1600?}   swap real Dev for the drawn one (or back); over = cross-fade ms
   outro    {"next":"Dictionaries","thanks":["Nicole"],"phases":[{"phase":"next","text":"…","mood":"deception"}]?}
-Inline [mood] tags inside any text switch Glitch's face mid-line. [pause 500] (ms; [pause] = 500) is a real silence in the voice (Kokoro ignores "..." and commas); Glitch's mouth stops for it. Lines ≤ 70 chars. Every text line must be speakable. [hand greeting] / [hand signoff] inside a DEV line starts avatar Dev's arm at that word: the palm-forward hello into the hand on his chest, and the point down the lens for the sign-off.
+Inline [mood] tags inside any text switch Glitch's face mid-line. [pause 500] (ms; [pause] = 500) is a real silence in the voice (Kokoro ignores "..." and commas); Glitch's mouth stops for it. Lines ≤ 70 chars. Every text line must be speakable. [hand <name>] inside a DEV line drives avatar Dev's arm from that word. greeting and signoff are timed clips that play through. The rest are HELD: the hand goes up and stays until another [hand ...] or [hand home] puts it away, so counting across a sentence is three tags, not three animations.
 "end" defaults to the next marker (or start+100); pass "end" in the json to override.`;
 
 const TEMPLATE = (title: string) => `script:
