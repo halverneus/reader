@@ -2,7 +2,7 @@
 // window, the camera and the mic on one clock and streams previews + meters back. Replaces OBS, which stays
 // selectable in Settings (capture.backend) until the GStreamer path has proven itself.
 import { app, ipcMain } from "electron";
-import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { spawn, execFile, execFileSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -206,10 +206,30 @@ export function probeEngine(): Promise<any> {
 }
 
 export const capture = new Capture();
+/** Is the desktop session locked? On Wayland the ScreenCast portal will not
+ *  grant or restore a stream behind the lock screen — the request simply never
+ *  answers, and the engine then refuses to record with "pick the VM window",
+ *  which gives no hint at the real cause. Verified on KDE/Wayland 2026-11-02:
+ *  40s of "restoring the saved window…" and no stream. Worth saying plainly. */
+export function sessionLocked(): boolean | null {
+  const ask = (args: string[]) => { try { return execFileSync("loginctl", args, { encoding: "utf8", timeout: 4000 }); } catch { return ""; } };
+  let id = process.env.XDG_SESSION_ID ?? "";
+  if (!id) {
+    const list = ask(["list-sessions", "--no-legend"]);
+    id = list.split("\n").map((l) => l.trim().split(/\s+/)[0]).filter(Boolean)[0] ?? "";
+  }
+  if (!id) return null;
+  const out = ask(["show-session", id, "-p", "LockedHint"]);
+  if (!out.includes("LockedHint=")) return null;
+  return out.includes("LockedHint=yes");
+}
+
 export function registerCaptureIpc() {
   ipcMain.handle("capture:pick", () => capture.pick());
   ipcMain.handle("capture:resetCamera", () => capture.resetCamera());
   ipcMain.handle("capture:restart", () => capture.restart());
   ipcMain.handle("capture:status", () => capture.pushStatus());
+  ipcMain.handle("capture:statusNow", () => capture.status());
+  ipcMain.handle("host:locked", () => sessionLocked());
   ipcMain.handle("capture:devices", () => listDevices());
 }

@@ -39,6 +39,40 @@ export const DEFAULT_OPTIONS: RunOptions = {
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Check once, before the first lesson, the things that would otherwise fail
+ * every lesson identically. Returns the blocking reasons, most important
+ * first; empty means go.
+ *
+ * The lock check earns its place: on Wayland the ScreenCast portal will not
+ * restore a stream behind the lock screen, and the engine's own complaint is
+ * "pick the VM window before recording", which sends you looking in the wrong
+ * place entirely.
+ */
+export async function preflight(opts: RunOptions): Promise<string[]> {
+  const bad: string[] = [];
+
+  const locked = await window.studio.invoke("host:locked").catch(() => null);
+  if (locked === true) bad.push("The desktop session is locked. Screen capture cannot start behind the lock screen — the portal never hands over a stream. Unlock and leave it unlocked for the run.");
+
+  const cap: any = await window.studio.invoke("capture:statusNow").catch(() => null);
+  if (!cap) bad.push("The capture engine is not answering. Open the Record tab and check the sources.");
+  else {
+    const desk = (cap.sources ?? []).find((s: any) => s.id === "desktop");
+    if (!desk) bad.push("No desktop source at all.");
+    else if (desk.status !== "live" && desk.status !== "starting")
+      bad.push(`The screen source is "${desk.status}"${desk.detail ? ` (${desk.detail})` : ""}. Pick the VM window on the Record tab first: every take would record nothing.`);
+  }
+
+  if (opts.prep || opts.reboot) {
+    const vm: any = await window.studio.invoke("vm:state").catch(() => null);
+    if (!vm?.vm) bad.push("No VM found over libvirt, but VM prep or reboot is switched on. If the VM lives in GNOME Boxes, Boxes has to be running.");
+    else if (opts.reboot && !vm.agent) { /* not blocking: the UI already warns, and waitReady falls back to a timed wait */ }
+  }
+
+  return bad;
+}
 const label = (p: string) => p.split("/").slice(-2, -1)[0] ?? p;
 
 let cancelled = false;
@@ -117,6 +151,8 @@ async function runOne(path: string, opts: RunOptions, set: (p: Partial<RunStep>)
  */
 export async function runBatch(paths: string[], opts: RunOptions, onProgress: (steps: RunStep[]) => void): Promise<RunStep[]> {
   cancelled = false;
+  const blocked = await preflight(opts);
+  if (blocked.length) { toast(blocked[0], "error", true); throw new Error(blocked.join(" ")); }
   const steps: RunStep[] = paths.map((p) => ({ path: p, label: label(p), state: "pending" }));
   const emit = () => onProgress([...steps]);
   emit();

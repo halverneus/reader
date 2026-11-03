@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { toast } from "../store";
-import { runBatch, cancelRun, RunStep, RunOptions, DEFAULT_OPTIONS } from "../runner";
+import { runBatch, cancelRun, preflight, RunStep, RunOptions, DEFAULT_OPTIONS } from "../runner";
 import { parseScript, cameraPlan } from "../../shared/script";
 
 interface ScriptFileInfo { path: string; course: string; week: string; lesson: string; mtime: number }
@@ -18,9 +18,15 @@ export function RunView() {
   const [steps, setSteps] = useState<RunStep[]>([]);
   const [running, setRunning] = useState(false);
   const [vm, setVm] = useState<VmInfo | null>(null);
+  const [blocked, setBlocked] = useState<string[]>([]);
 
   useEffect(() => { window.studio.invoke("scripts:list").then(setAll).catch(() => {}); refreshVm(); }, []);
-  const refreshVm = () => window.studio.invoke("vm:state").then(setVm).catch(() => setVm(null));
+  const refreshVm = () => {
+    window.studio.invoke("vm:state").then(setVm).catch(() => setVm(null));
+    preflight(opts).then(setBlocked).catch(() => setBlocked([]));
+  };
+  // Re-check whenever an option that preflight depends on changes.
+  useEffect(() => { if (!running) preflight(opts).then(setBlocked).catch(() => setBlocked([])); }, [opts.prep, opts.reboot, running]);
 
   const weeks = useMemo(() => [...new Set(all.map((s) => `${s.course} / ${s.week}`))].sort(), [all]);
   const lessons = useMemo(
@@ -125,8 +131,18 @@ export function RunView() {
         </p>
       )}
 
+      {!!blocked.length && !running && (
+        <div class="box warn" style="border:1px solid #e74c3c;border-radius:6px;padding:10px 12px">
+          <strong style="color:#e74c3c">Cannot start</strong>
+          <ul style="margin:6px 0 0;padding-left:18px">
+            {blocked.map((b) => <li key={b} style="font-size:13px;line-height:1.5">{b}</li>)}
+          </ul>
+        </div>
+      )}
+
       <div class="row" style="gap:8px">
-        <button class="btn primary" disabled={running || !order.length} onClick={start}>
+        <button class="btn" onClick={refreshVm} disabled={running}>Re-check</button>
+        <button class="btn primary" disabled={running || !order.length || blocked.length > 0} onClick={start}>
           {running ? "Running…" : `Run ${order.length} lesson${order.length === 1 ? "" : "s"}`}
         </button>
         <button class="btn" disabled={!running} onClick={() => { cancelRun(); toast("Will stop after this lesson", "info"); }}>
