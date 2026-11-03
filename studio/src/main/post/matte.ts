@@ -22,7 +22,15 @@ export async function ensureImage(log: Log) {
 
 export async function matteCam(dir: string, session: any, log: Log): Promise<string> {
   const cam = session.meta?.files?.cam && fs.existsSync(session.meta.files.cam) ? session.meta.files.cam : findCam(dir);
-  if (!cam) throw new Error("No cam recording (cam*.mkv) in the session folder");
+  if (!cam) {
+    // An avatar episode films the screen alone — there is no camera, and the
+    // drawn Dev is rendered from the cue log in the `devatar` step instead.
+    // Only shout when a camera WAS recorded and its file has gone missing,
+    // which is the failure this error was written for.
+    const srcs: string[] = session.meta?.capture?.srcs ?? [];
+    if (srcs.length && !srcs.includes("cam")) { log("[matte] no camera in this take (avatar episode); nothing to matte\n"); return "avatar episode — no camera"; }
+    throw new Error("No cam recording (cam*.mkv) in the session folder");
+  }
   const out = path.join(dir, "dev-alpha.webm");
   if (fs.existsSync(out) && fs.statSync(out).mtimeMs > fs.statSync(cam).mtimeMs) return "exists";
   await ensureImage(log);
