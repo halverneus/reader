@@ -765,6 +765,71 @@ ${extra.join("\n")}`).script;
   ok(cameraPlan(all).dropAtMarker == null, "and there is nothing to drop part way");
 }
 
+group("which lessons can run with nobody in the room");
+{
+  // The unattended runner's whole gate is `cameraPlan(script).srcs.length === 1`.
+  // If that ever stops meaning "no human needed", the runner starts recording
+  // takes of an empty chair, so pin the meaning here rather than in the UI.
+  const selfDriving = (s: any) => cameraPlan(s).srcs.length === 1;
+
+  const avatarFirst = parseScript(`script:
+- type: "avatar"
+  start: 100
+  end: 200
+  to: "avatar"
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "Greetings."
+- type: "line"
+  actor: "Glitch"
+  start: 300
+  end: 400
+  text: "And I am Glitch."
+`).script;
+  ok(selfDriving(avatarFirst), "avatar on before the first line: runnable unattended");
+
+  const swapsMidway = parseScript(`script:
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "Greetings."
+- type: "avatar"
+  start: 400
+  end: 500
+  to: "avatar"
+`).script;
+  ok(!selfDriving(swapsMidway), "a mid-script swap still needs Dev on camera for the opening");
+
+  const noAvatar = parseScript(`script:
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "Greetings."
+`).script;
+  ok(!selfDriving(noAvatar), "no swap at all is never runnable unattended");
+
+  const comesBack = parseScript(`script:
+- type: "avatar"
+  start: 100
+  end: 200
+  to: "avatar"
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "Greetings."
+- type: "avatar"
+  start: 400
+  end: 500
+  to: "real"
+`).script;
+  ok(!selfDriving(comesBack), "an episode that hands the shot back to the real Dev needs him there");
+}
+
 group("avatar Dev's hands");
 {
   const line = (actor: string, text: string) => `script:

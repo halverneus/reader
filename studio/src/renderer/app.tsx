@@ -2,6 +2,7 @@ import { useEffect } from "preact/hooks";
 import { setState, useStore, Tab } from "./store";
 import { ScriptView } from "./views/script";
 import { RecordView } from "./views/record";
+import { RunView } from "./views/run";
 import { PostView } from "./views/post";
 import { SettingsView } from "./views/settings";
 import { VoiceView } from "./views/voice";
@@ -11,10 +12,11 @@ import { loadScriptFile } from "./script-io";
 const TABS: { id: Tab; label: string; key: string }[] = [
   { id: "script", label: "Script", key: "1" },
   { id: "record", label: "Record", key: "2" },
-  { id: "post", label: "Post", key: "3" },
-  { id: "voice", label: "Voice", key: "4" },
-  { id: "gestures", label: "Gestures", key: "5" },
-  { id: "settings", label: "Settings", key: "6" },
+  { id: "run", label: "Run", key: "3" },
+  { id: "post", label: "Post", key: "4" },
+  { id: "voice", label: "Voice", key: "5" },
+  { id: "gestures", label: "Gestures", key: "6" },
+  { id: "settings", label: "Settings", key: "7" },
 ];
 
 export function App() {
@@ -28,7 +30,7 @@ export function App() {
     })();
     const offPlay = window.studio.on("tts:play", (b64: string) => { new Audio("data:audio/wav;base64," + b64).play().catch(() => {}); });
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && /^[1-6]$/.test(e.key)) { e.preventDefault(); setState({ tab: TABS[+e.key - 1].id }); }
+      if ((e.ctrlKey || e.metaKey) && /^[1-7]$/.test(e.key)) { e.preventDefault(); setState({ tab: TABS[+e.key - 1].id }); }
     };
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("keydown", onKey); offPlay(); };
@@ -47,6 +49,7 @@ export function App() {
       <main class="content">
         {s.tab === "script" && <ScriptView />}
         {s.tab === "record" && <RecordView />}
+        {s.tab === "run" && <RunView />}
         {s.tab === "post" && <PostView />}
         {s.tab === "voice" && <VoiceView />}
         {s.tab === "gestures" && <GesturesView />}

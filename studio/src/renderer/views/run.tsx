@@ -1,0 +1,138 @@
+import { useEffect, useMemo, useState } from "preact/hooks";
+import { toast } from "../store";
+import { runBatch, cancelRun, RunStep, RunOptions, DEFAULT_OPTIONS } from "../runner";
+import { parseScript, cameraPlan } from "../../shared/script";
+
+interface ScriptFileInfo { path: string; course: string; week: string; lesson: string; mtime: number }
+interface VmInfo { vm: { uri: string; domain: string } | null; state: string; boxes: boolean; agent: boolean }
+
+const fmt = (ms?: number) => (ms == null ? "" : `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}`);
+const DOT: Record<string, string> = { pending: "·", prep: "⚙", recording: "●", post: "⏵", done: "✓", failed: "✕", skipped: "–" };
+
+export function RunView() {
+  const [all, setAll] = useState<ScriptFileInfo[]>([]);
+  const [week, setWeek] = useState<string>("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [eligible, setEligible] = useState<Record<string, string>>({}); // path → "" ok, else why not
+  const [opts, setOpts] = useState<RunOptions>(DEFAULT_OPTIONS);
+  const [steps, setSteps] = useState<RunStep[]>([]);
+  const [running, setRunning] = useState(false);
+  const [vm, setVm] = useState<VmInfo | null>(null);
+
+  useEffect(() => { window.studio.invoke("scripts:list").then(setAll).catch(() => {}); refreshVm(); }, []);
+  const refreshVm = () => window.studio.invoke("vm:state").then(setVm).catch(() => setVm(null));
+
+  const weeks = useMemo(() => [...new Set(all.map((s) => `${s.course} / ${s.week}`))].sort(), [all]);
+  const lessons = useMemo(
+    () => all.filter((s) => `${s.course} / ${s.week}` === week).sort((a, b) => a.lesson.localeCompare(b.lesson)),
+    [all, week]);
+
+  // Read each lesson once to say, before anything runs, which can go unattended.
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const out: Record<string, string> = {};
+      for (const l of lessons) {
+        try {
+          const { script, errors } = parseScript(await window.studio.invoke("scripts:read", l.path));
+          out[l.path] = errors.length ? `${errors.length} parse issue(s)`
+            : cameraPlan(script).srcs.length === 1 ? "" : "needs Dev on camera";
+        } catch (e: any) { out[l.path] = e?.message ?? "unreadable"; }
+      }
+      if (!dead) {
+        setEligible(out);
+        setPicked(new Set(lessons.filter((l) => out[l.path] === "").map((l) => l.path)));
+      }
+    })();
+    return () => { dead = true; };
+  }, [lessons]);
+
+  const toggle = (p: string) => setPicked((s) => { const n = new Set(s); n.has(p) ? n.delete(p) : n.add(p); return n; });
+  const order = lessons.filter((l) => picked.has(l.path)).map((l) => l.path);
+
+  async function start() {
+    if (!order.length) { toast("Nothing selected", "error"); return; }
+    setRunning(true);
+    try { await runBatch(order, opts, setSteps); }
+    finally { setRunning(false); refreshVm(); }
+  }
+
+  const opt = (k: keyof RunOptions, lbl: string, title: string) => (
+    <label class="row" style="gap:5px;font-size:12px" title={title}>
+      <input type="checkbox" disabled={running} checked={!!opts[k]} onChange={(e: any) => setOpts({ ...opts, [k]: e.currentTarget.checked })} /> {lbl}
+    </label>
+  );
+
+  return (
+    <div class="pad" style="display:flex;flex-direction:column;gap:14px;overflow:auto">
+      <div>
+        <h2 style="margin:0 0 4px">Unattended run</h2>
+        <p class="muted" style="margin:0;max-width:70ch">
+          Records and posts a list of lessons with nobody in the room. Only works for episodes where
+          avatar Dev is on from the first marker: those read every line themselves and film the screen
+          alone. Anything that needs Dev on camera is listed but cannot be selected.
+        </p>
+      </div>
+
+      <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
+        <select disabled={running} value={week} onChange={(e: any) => setWeek(e.currentTarget.value)}>
+          <option value="">Pick a week…</option>
+          {weeks.map((w) => <option key={w} value={w}>{w}</option>)}
+        </select>
+        <span style="flex:1" />
+        <span class="muted mono" style="font-size:12px">
+          VM: {vm?.vm ? `${vm.vm.domain} (${vm.state})` : "none found"}
+          {vm?.boxes ? " · Boxes running" : ""}{vm?.agent ? " · guest agent" : " · no guest agent"}
+        </span>
+        <button class="btn" onClick={refreshVm} disabled={running}>↻</button>
+      </div>
+
+      {!!lessons.length && (
+        <table class="rows" style="width:100%">
+          <tbody>
+            {lessons.map((l) => {
+              const why = eligible[l.path];
+              const st = steps.find((s) => s.path === l.path);
+              return (
+                <tr key={l.path}>
+                  <td style="width:26px">
+                    <input type="checkbox" disabled={running || why !== ""} checked={picked.has(l.path)} onChange={() => toggle(l.path)} />
+                  </td>
+                  <td>{l.lesson}</td>
+                  <td class="muted" style="font-size:12px">{why === undefined ? "checking…" : why || "avatar episode"}</td>
+                  <td class="mono" style="width:140px">
+                    {st ? <>{DOT[st.state] ?? "·"} {st.state}{st.ms ? ` ${fmt(st.ms)}` : ""}</> : ""}
+                  </td>
+                  <td class="muted" style="font-size:12px;color:#e74c3c">{st?.error ?? ""}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      <div class="row" style="gap:16px;flex-wrap:wrap;align-items:center">
+        {opt("post", "run post after each", "Build the Kdenlive project (and render, if that is on in Settings) as soon as a take finishes")}
+        {opt("reboot", "reboot the VM between lessons", "Clears the Activate Windows watermark. Needs the VM reachable over libvirt")}
+        {opt("prep", "prep the VM desktop first", "Blind keystrokes: alt+tab, F11, click the deck, Home. It cannot see the screen, so check the first take")}
+      </div>
+
+      {opts.reboot && !vm?.agent && (
+        <p class="muted" style="margin:0;font-size:12px;max-width:70ch">
+          No guest agent in the VM, so after a reboot there is no way to ask whether the desktop is
+          back. The runner will wait {Math.round(opts.settleMs / 1000)}s and carry on regardless. Installing
+          qemu-guest-agent in the guest turns that guess into a check.
+        </p>
+      )}
+
+      <div class="row" style="gap:8px">
+        <button class="btn primary" disabled={running || !order.length} onClick={start}>
+          {running ? "Running…" : `Run ${order.length} lesson${order.length === 1 ? "" : "s"}`}
+        </button>
+        <button class="btn" disabled={!running} onClick={() => { cancelRun(); toast("Will stop after this lesson", "info"); }}>
+          Stop after this one
+        </button>
+      </div>
+    </div>
+  );
+}

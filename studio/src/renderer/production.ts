@@ -31,6 +31,17 @@ class Production {
   private keepAlive: AudioContext | null = null;
 
   subscribe(f: () => void) { this.subs.add(f); return () => { this.subs.delete(f); }; }
+
+  /** Fires when the script runs off its last marker. The unattended runner
+   *  waits on this to know a lesson is finished; nothing else uses it, and a
+   *  throwing hook must not take the transport down with it. */
+  private endHooks = new Set<(reason: string) => void>();
+  onEnd(f: (reason: string) => void) { this.endHooks.add(f); return () => { this.endHooks.delete(f); }; }
+  private fireEnd(reason: string) { for (const f of [...this.endHooks]) { try { f(reason); } catch {} } }
+
+  /** True when nobody has to be in the room: avatar Dev reads every line and
+   *  the take records the screen alone. The runner refuses anything else. */
+  get selfDriving() { return cameraPlan(getState().script).srcs.length === 1; }
   private emit() { for (const f of this.subs) f(); }
   private set(p: Partial<ProdState>) { this.st = { ...this.st, ...p }; this.emit(); }
 
@@ -89,7 +100,7 @@ class Production {
   async advance() {
     const script = getState().script;
     const marker = nextMarker(script, this.st.marker);
-    if (marker == null) { toast("End of script", "info"); return; }
+    if (marker == null) { toast("End of script", "info"); this.fireEnd("end"); return; }
     const old = this.st.marker;
     this.cancelSpeech();
     this.history.push(old);

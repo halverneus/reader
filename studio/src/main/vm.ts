@@ -162,8 +162,66 @@ function setHostClipboard(text: string): Promise<void> {
   });
 }
 
+// ── lifecycle ────────────────────────────────────────────────────────────────
+// Enough to let the unattended runner reboot between lessons. Windows shows an
+// "Activate Windows" watermark after a few hours up, and a reboot clears it.
+//
+// CAUTION: the VM normally lives inside the GNOME Boxes flatpak, whose libvirt
+// daemon only exists while Boxes is running. Everything here therefore works
+// through whichever URI findVm() reached. If the same disk is ever defined on
+// two daemons, never start both: two qemu processes on one qcow2 destroys it.
+
+const virsh = (uri: string, args: string[], timeout = 15000): Promise<{ ok: boolean; out: string }> =>
+  new Promise((resolve) => execFile("virsh", ["-c", uri, ...args], { timeout, encoding: "utf8" },
+    (err, stdout, stderr) => resolve({ ok: !err, out: String(stdout || stderr || "").trim() })));
+
+export function boxesRunning() { return fs.existsSync(BOXES_SOCKET); }
+
+export async function vmState(): Promise<{ vm: Vm | null; state: string; boxes: boolean; agent: boolean }> {
+  const vm = findVm();
+  const boxes = boxesRunning();
+  if (!vm) return { vm: null, state: "no vm", boxes, agent: false };
+  const st = await virsh(vm.uri, ["domstate", vm.domain], 6000);
+  const ping = await virsh(vm.uri, ["qemu-agent-command", vm.domain, '{"execute":"guest-ping"}'], 4000);
+  return { vm, state: st.ok ? st.out : "unknown", boxes, agent: ping.ok };
+}
+
+/** Wait until the domain is running and, if the guest agent is installed, until
+ *  it answers. Without an agent there is no readiness signal at all, so we fall
+ *  back to a flat settle time — the caller's `settleMs`. That is the honest
+ *  behaviour: it is a guess, not a check. */
+export async function vmWaitReady(timeoutMs = 240000, settleMs = 90000): Promise<{ ready: boolean; how: string }> {
+  const vm = findVm();
+  if (!vm) return { ready: false, how: "no vm" };
+  const deadline = Date.now() + timeoutMs;
+  let sawRunning = false;
+  while (Date.now() < deadline) {
+    const st = await virsh(vm.uri, ["domstate", vm.domain], 6000);
+    if (st.ok && st.out.startsWith("running")) {
+      if (!sawRunning) { sawRunning = true; broadcast("vm:status", { state: "running, waiting for the desktop" }); }
+      const ping = await virsh(vm.uri, ["qemu-agent-command", vm.domain, '{"execute":"guest-ping"}'], 4000);
+      if (ping.ok) return { ready: true, how: "guest agent answered" };
+    }
+    await sleep(3000);
+  }
+  if (sawRunning) { await sleep(settleMs); return { ready: true, how: `no guest agent: waited ${Math.round(settleMs / 1000)}s and hoped` }; }
+  return { ready: false, how: "domain never reached running" };
+}
+
+export async function vmPower(action: "start" | "reboot" | "shutdown"): Promise<{ ok: boolean; out: string }> {
+  const vm = findVm();
+  if (!vm) return { ok: false, out: "no running VM found via libvirt" };
+  const cmd = action === "start" ? ["start", vm.domain]
+    : action === "reboot" ? ["reboot", vm.domain]          // ACPI; Windows honours it
+    : ["shutdown", vm.domain];
+  return virsh(vm.uri, cmd, 20000);
+}
+
 export function registerVmIpc() {
   ipcMain.handle("keys:run", (_e, { entryId, steps, speed, dryRun }) => runSteps(entryId, steps, speed, !!dryRun));
   ipcMain.handle("keys:cancel", () => { cancelFlag.v = true; });
   ipcMain.handle("vm:find", () => findVm());
+  ipcMain.handle("vm:state", () => vmState());
+  ipcMain.handle("vm:power", (_e, action: "start" | "reboot" | "shutdown") => vmPower(action));
+  ipcMain.handle("vm:waitReady", (_e, { timeoutMs, settleMs }: any = {}) => vmWaitReady(timeoutMs, settleMs));
 }
