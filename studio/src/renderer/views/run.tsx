@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { toast } from "../store";
-import { runBatch, cancelRun, preflight, RunStep, RunOptions, DEFAULT_OPTIONS } from "../runner";
+import { runBatch, cancelRun, preflight, watchRun, runActive, RunStep, RunOptions, DEFAULT_OPTIONS } from "../runner";
 import { parseScript, cameraPlan } from "../../shared/script";
 
 interface ScriptFileInfo { path: string; course: string; week: string; lesson: string; mtime: number }
@@ -16,11 +16,14 @@ export function RunView() {
   const [eligible, setEligible] = useState<Record<string, string>>({}); // path → "" ok, else why not
   const [opts, setOpts] = useState<RunOptions>(DEFAULT_OPTIONS);
   const [steps, setSteps] = useState<RunStep[]>([]);
-  const [running, setRunning] = useState(false);
+  const [running, setRunning] = useState(runActive());
   const [vm, setVm] = useState<VmInfo | null>(null);
   const [blocked, setBlocked] = useState<string[]>([]);
 
   useEffect(() => { window.studio.invoke("scripts:list").then(setAll).catch(() => {}); refreshVm(); }, []);
+  // An autorun (started from the command line) drives the same runner, so the
+  // tab shows its progress rather than sitting there looking idle.
+  useEffect(() => watchRun((s, r) => { setSteps(s); setRunning(r); }), []);
   const refreshVm = () => {
     window.studio.invoke("vm:state").then(setVm).catch(() => setVm(null));
     preflight(opts).then(setBlocked).catch(() => setBlocked([]));
@@ -118,6 +121,7 @@ export function RunView() {
       )}
 
       <div class="row" style="gap:16px;flex-wrap:wrap;align-items:center">
+        {opt("stage", "load each lesson's deck in the VM", "Before each take: empty the Workbench SQL tab, then open this lesson's own Slides.html fullscreen on slide 1. Without it a batch records the next script over the last lesson's slides")}
         {opt("post", "run post after each", "Build the Kdenlive project (and render, if that is on in Settings) as soon as a take finishes")}
         {opt("reboot", "reboot the VM between lessons", "Clears the Activate Windows watermark. Needs the VM reachable over libvirt")}
         {opt("prep", "prep the VM desktop first", "Blind keystrokes: alt+tab, F11, click the deck, Home. It cannot see the screen, so check the first take")}

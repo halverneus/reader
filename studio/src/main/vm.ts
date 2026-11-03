@@ -2,6 +2,8 @@
 import { ipcMain } from "electron";
 import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { loadConfig } from "./config";
 import { parseStep, KeyStep } from "../shared/script";
 import { broadcast } from "./index";
@@ -208,6 +210,58 @@ export async function vmWaitReady(timeoutMs = 240000, settleMs = 90000): Promise
   return { ready: false, how: "domain never reached running" };
 }
 
+/** Keep the guest's display awake during the parts of a run where nothing is
+ *  being typed — post-production, a reboot wait, the gap between lessons.
+ *
+ *  A lone shift, down and up, in ONE input-send-event: nothing in a browser or
+ *  in Workbench reacts to it, and a single QMP command cannot interleave with
+ *  the keystrokes a script is sending, so it is safe to fire mid-take too.
+ *  A mouse move would be safer still for the guest, except that it un-hides
+ *  the pointer in the middle of a slide, which the camera sees. */
+export async function vmNudge(): Promise<boolean> {
+  const vm = findVm();
+  if (!vm) return false;
+  await sendEvents(vm, [keyEv("shift", true), keyEv("shift", false)]);
+  return true;
+}
+
+/** Make the GNOME Boxes window fullscreen on the HOST.
+ *
+ *  Why Studio has to care: the capture records the Boxes *window*, so if Boxes
+ *  is merely maximised, its header bar is in the shot and the guest's 1080
+ *  lines are squeezed into the 1058 that are left — every slide slightly
+ *  soft, every take different from the last. Verified 2026-11-03 by comparing
+ *  a test capture against the shipped Week 07 lesson 01 take.
+ *
+ *  It cannot be done with the keys we send the guest: QMP input goes to the
+ *  VM, and fullscreen belongs to the host's window manager. KWin's scripting
+ *  interface can do it in one call, and no-ops harmlessly anywhere else. */
+export function fullscreenVmWindow(): { ok: boolean; detail: string } {
+  const js = `try {
+  const list = (typeof workspace.windowList === "function") ? workspace.windowList() : workspace.clientList();
+  for (let i = 0; i < list.length; i++) {
+    const w = list[i];
+    let cls = ""; try { cls = String(w.resourceClass || "").toLowerCase(); } catch (e) {}
+    if (cls.indexOf("boxes") >= 0) {
+      try { workspace.activeWindow = w; } catch (e) {}
+      try { w.fullScreen = true; } catch (e) { workspace.slotWindowFullScreen(); }
+    }
+  }
+} catch (e) {}`;
+  const file = path.join(os.tmpdir(), "metrik-boxes-fullscreen.js");
+  const bus = (args: string[]) => execFileSync("busctl", ["--user", ...args], { encoding: "utf8", timeout: 5000 });
+  try {
+    fs.writeFileSync(file, js);
+    try { bus(["call", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "unloadScript", "s", "metrik-boxes-fs"]); } catch {}
+    const out = bus(["call", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "loadScript", "ss", file, "metrik-boxes-fs"]);
+    const id = (out.trim().split(/\s+/)[1] ?? "").trim();
+    bus(["call", "org.kde.KWin", `/Scripting/Script${id}`, "org.kde.kwin.Script", "run"]);
+    return { ok: true, detail: `KWin script ${id}` };
+  } catch (e: any) {
+    return { ok: false, detail: e?.message ?? String(e) };
+  }
+}
+
 export async function vmPower(action: "start" | "reboot" | "shutdown"): Promise<{ ok: boolean; out: string }> {
   const vm = findVm();
   if (!vm) return { ok: false, out: "no running VM found via libvirt" };
@@ -223,5 +277,7 @@ export function registerVmIpc() {
   ipcMain.handle("vm:find", () => findVm());
   ipcMain.handle("vm:state", () => vmState());
   ipcMain.handle("vm:power", (_e, action: "start" | "reboot" | "shutdown") => vmPower(action));
+  ipcMain.handle("vm:nudge", () => vmNudge());
+  ipcMain.handle("vm:fullscreen", () => fullscreenVmWindow());
   ipcMain.handle("vm:waitReady", (_e, { timeoutMs, settleMs }: any = {}) => vmWaitReady(timeoutMs, settleMs));
 }

@@ -8,6 +8,7 @@ import { SettingsView } from "./views/settings";
 import { VoiceView } from "./views/voice";
 import { GesturesView } from "./views/gestures";
 import { loadScriptFile } from "./script-io";
+import { startAutorun } from "./runner";
 
 const TABS: { id: Tab; label: string; key: string }[] = [
   { id: "script", label: "Script", key: "1" },
@@ -27,6 +28,11 @@ export function App() {
       setState({ config });
       const override = await window.studio.invoke("config:get:override").catch(() => null);
       if (override) await loadScriptFile(override); else if (config.lastScript) await loadScriptFile(config.lastScript);
+      // `metrik-studio --autorun plan.json`: records a list of lessons with
+      // nobody here. Shown on the Run tab so a passer-by can see what it is
+      // doing (and stop it), but it does not wait to be told to start.
+      const plan = await window.studio.invoke("autorun:plan").catch(() => null);
+      if (plan) { setState({ tab: "run" }); startAutorun(plan); }
     })();
     const offPlay = window.studio.on("tts:play", (b64: string) => { new Audio("data:audio/wav;base64," + b64).play().catch(() => {}); });
     const onKey = (e: KeyboardEvent) => {

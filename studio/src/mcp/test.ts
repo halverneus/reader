@@ -6,7 +6,8 @@
 import { verbless, runup, checkText, COURSEWORK, errorsOf } from "../shared/check";
 import { Editor, replayText, SUSPICIOUS } from "../shared/wb";
 import { keyStatus } from "../shared/keys";
-import { cameraPlan, parseScript, serializeScript, splitMoodTags, speechChunks, validate, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
+import { deckUrlFor, stageSteps } from "../shared/stage";
+import { cameraPlan, parseScript, parseStep, serializeScript, splitMoodTags, speechChunks, validate, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
 import { applyGestures, GESTURES, gestureNames, gestureLength, holdAt, HOME } from "../../glitch/dev-hands-data";
 import { markerDiff } from "../shared/diff";
 import { crossRepeats } from "../shared/across";
@@ -828,6 +829,36 @@ group("which lessons can run with nobody in the room");
   to: "real"
 `).script;
   ok(!selfDriving(comesBack), "an episode that hands the shot back to the real Dev needs him there");
+}
+
+group("staging the guest between lessons");
+{
+  // A batch that does not load the next lesson's deck records the right words
+  // over the wrong slides, and nothing in the take says so.
+  const TPL = "file:///Z:/Material/{week}/{lesson}/Slides.html#1";
+  const url = deckUrlFor("/home/j/Courses/CS235/Course/Week 07/03 - Prepared Statements/Script.yml", TPL);
+  ok(url === "file:///Z:/Material/Week%2007/03%20-%20Prepared%20Statements/Slides.html#1",
+     "spaces are encoded for the guest's address bar", url);
+
+  const steps = stageSteps(url);
+  ok(steps.some((s) => s === `t:${url}`), "the URL is typed verbatim");
+  ok(steps.filter((s) => s === "k:alt+tab").length === 2, "goes to Workbench and comes back, so the deck ends with focus");
+  ok(steps.indexOf("k:ctrl+a") < steps.indexOf("k:ctrl+l"), "the editor is emptied before the browser is touched");
+  // Verified on the VM 2026-11-03: the browser is already fullscreen, and F11
+  // here would turn it OFF and put the Windows taskbar in every shot.
+  ok(!steps.some((s) => s.includes("f11")), "never touches fullscreen");
+  ok(steps[steps.length - 2] === "k:home", "ends on slide 1");
+
+  // The one that matters. parseStep TYPES anything it does not recognise, so a
+  // made-up prefix does not fail — it goes into whatever has focus. The first
+  // draft said "combo:alt+tab" and typed the entire staging sequence into the
+  // Workbench editor while the recorder filmed it (2026-11-03).
+  for (const step of steps) {
+    const parsed = parseStep(step);
+    const expected = step.startsWith("t:") ? "type" : step.startsWith("w:") ? "wait" : step.startsWith("m:") ? "mouse"
+      : step.slice(2).includes("+") ? "combo" : "key";
+    ok(parsed.kind === expected, `step "${step}" parses as ${expected}`, `got ${parsed.kind}`);
+  }
 }
 
 group("avatar Dev's hands");

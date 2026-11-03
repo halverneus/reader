@@ -47,7 +47,13 @@ class Production {
 
   constructor() {
     window.studio.on("keys:progress", ({ entryId, step }: any) => { if (this.st.keysEntryId === entryId) this.set({ keysStep: step }); });
-    window.studio.on("capture:lost", (why: string) => toast(`NOT RECORDING: ${why}. Stop, and record this take again.`, "error", true));
+    window.studio.on("capture:lost", (why: string) => {
+      toast(`NOT RECORDING: ${why}. Stop, and record this take again.`, "error", true);
+      // Nobody is in the room on an unattended run, so the toast reaches no
+      // one: tell whatever is driving, which stops the take there instead of
+      // reading the remaining twenty minutes to a dead recorder.
+      this.fireEnd("lost");
+    });
   }
 
   clockText() {

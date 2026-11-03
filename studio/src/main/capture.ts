@@ -1,7 +1,7 @@
 // The capture engine: a long-lived system-python GStreamer child (recorder/metrik_recorder.py) that records the VM
 // window, the camera and the mic on one clock and streams previews + meters back. Replaces OBS, which stays
 // selectable in Settings (capture.backend) until the GStreamer path has proven itself.
-import { app, ipcMain } from "electron";
+import { app, ipcMain, powerSaveBlocker } from "electron";
 import { spawn, execFile, execFileSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -121,6 +121,7 @@ class Capture {
 
   // ── public API ─────────────────────────────────────────────────────────────
   async startRecording(dir: string, srcs?: string[]): Promise<RecordTiming> {
+    keepDisplayAwake(true);          // a sleeping monitor records black frames
     if (!this.proc) this.start();
     if (!this.running) await this.wait("hello", "", 8000);
     this.stopRequested = false;
@@ -140,6 +141,7 @@ class Capture {
   }
   async stopRecording(): Promise<Partial<RecordTiming>> {
     if (!this.proc || !(this.recording || this.stopping)) return {};
+    keepDisplayAwake(false);
     this.stopRequested = true;
     const got = this.wait("stopped", "stop", 25000);
     this.send({ cmd: "stop" });
@@ -211,6 +213,75 @@ export const capture = new Capture();
  *  answers, and the engine then refuses to record with "pick the VM window",
  *  which gives no hint at the real cause. Verified on KDE/Wayland 2026-11-02:
  *  40s of "restoring the saved window…" and no stream. Worth saying plainly. */
+// ── keeping the host's screen awake ──────────────────────────────────────────
+//
+// THIS IS THE ONE THAT COST A MORNING (2026-11-03). The capture records a
+// WINDOW, and when KWin puts that window's output to sleep it stops painting
+// it: the PipeWire stream stays "live", the engine reports no error, the
+// recorder keeps writing — and every frame is black. Two lessons recorded
+// perfectly, seven and six minutes long, both entirely black, while
+// `virsh screenshot` showed the guest happily turning its own slides. The
+// guest was never the problem; the host's monitor going to sleep was.
+//
+// Worse, it does not recover: waking the display afterwards leaves the stream
+// black until the capture is restarted. So this has to be prevented, not
+// detected and repaired.
+//
+// Belt and braces, because the cost of getting it wrong is a wasted night:
+// an Electron power-save blocker (the polite way, through the inhibit
+// interface) AND a periodic `kscreen-doctor --dpms on` while recording, which
+// is a no-op when the display is already awake.
+
+let blockerId = -1;
+let dpmsTimer: NodeJS.Timeout | undefined;
+/** Refcounted: a batch holds it for the WHOLE run, including the gaps between
+ *  takes, while each recording holds it for itself. The gaps matter as much as
+ *  the takes — post can run for hours, and a stream that watched its output
+ *  fall asleep stays black when it wakes. */
+let holds = 0;
+
+/** Turn the monitors back on, best effort. KDE only; harmless anywhere else. */
+export function wakeDisplays(): void {
+  try { execFile("kscreen-doctor", ["--dpms", "on"], { timeout: 5000 }, () => {}); } catch {}
+}
+
+/** Hold the display awake for as long as something is being recorded. */
+export function keepDisplayAwake(on: boolean): void {
+  holds = Math.max(0, holds + (on ? 1 : -1));
+  try {
+    if (holds > 0) {
+      wakeDisplays();
+      if (blockerId < 0 || !powerSaveBlocker.isStarted(blockerId)) blockerId = powerSaveBlocker.start("prevent-display-sleep");
+      if (!dpmsTimer) dpmsTimer = setInterval(wakeDisplays, 4 * 60_000);
+    } else {
+      if (blockerId >= 0 && powerSaveBlocker.isStarted(blockerId)) powerSaveBlocker.stop(blockerId);
+      blockerId = -1;
+      clearInterval(dpmsTimer); dpmsTimer = undefined;
+    }
+  } catch {}
+}
+/** Is something holding the display awake right now? Surfaced in preflight. */
+export const displayHeldAwake = () => holds > 0;
+
+/** The app id the screen-cast portal sees for THIS process.
+ *
+ *  It decides everything about restoring the saved VM window: the portal files
+ *  the restore token under the app id, and hands it back only to the same one.
+ *  On this desktop the id comes from the systemd scope — launched from the KDE
+ *  menu that is `app-metrik\x2dstudio-NNNN.scope` → "metrik-studio"; launched
+ *  from a terminal it is the TERMINAL's scope → "org.kde.konsole", and the
+ *  portal, recognising nothing, silently waits for a human to answer a picker
+ *  dialog instead. Verified 2026-11-03: the identical recorder command hung at
+ *  "restoring the saved window…" from a terminal and went live in 0.5 s under
+ *  a metrik-studio scope. (It had been blamed on the lock screen the night
+ *  before. It was not the lock screen.) */
+export function portalAppId(): string {
+  try {
+    const m = fs.readFileSync("/proc/self/cgroup", "utf8").match(/app-(?:flatpak-)?(.+?)(?:-\d+)?\.scope/);
+    return m ? m[1].replace(/\\x2d/g, "-") : "";
+  } catch { return ""; }
+}
+
 export function sessionLocked(): boolean | null {
   const ask = (args: string[]) => { try { return execFileSync("loginctl", args, { encoding: "utf8", timeout: 4000 }); } catch { return ""; } };
   let id = process.env.XDG_SESSION_ID ?? "";
@@ -231,5 +302,9 @@ export function registerCaptureIpc() {
   ipcMain.handle("capture:status", () => capture.pushStatus());
   ipcMain.handle("capture:statusNow", () => capture.status());
   ipcMain.handle("host:locked", () => sessionLocked());
+  ipcMain.handle("host:appId", () => portalAppId());
+  ipcMain.handle("host:wake", () => { wakeDisplays(); return true; });
+  ipcMain.handle("host:awakeHeld", () => displayHeldAwake());
+  ipcMain.handle("host:keepAwake", (_e, on: boolean) => { keepDisplayAwake(!!on); return true; });
   ipcMain.handle("capture:devices", () => listDevices());
 }

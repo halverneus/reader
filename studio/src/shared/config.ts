@@ -32,7 +32,10 @@ export interface Config {
   actorModes: Record<string, "read" | "skip" | "hide">;
   anthropicApiKey: string;
   model: string;
-  vm: { uri: string; domain: string; width: number; height: number };
+  /** `deckUrl` is how the GUEST addresses a lesson's Slides.html: {week} and
+   *  {lesson} are the folder names, url-encoded. The share is Spice WebDAV
+   *  (Z:) in the Windows VM. Empty disables deck staging. */
+  vm: { uri: string; domain: string; width: number; height: number; deckUrl: string };
   kokoro: { url: string; autoStart: boolean; image: string };
   /** Dev's cloned voice (F5-TTS), served by voice/devvoice.py out of a venv
    *  that has torch. `refWav` + `refText` are the zero-shot reference. */
@@ -69,7 +72,7 @@ export const DEFAULTS: Config = {
   actorModes: { Dev: "skip", Glitch: "read" },
   anthropicApiKey: "",
   model: "claude-opus-5",
-  vm: { uri: "qemu:///session", domain: "", width: 1920, height: 1080 },
+  vm: { uri: "qemu:///session", domain: "", width: 1920, height: 1080, deckUrl: "file:///Z:/Material/{week}/{lesson}/Slides.html#1" },
   kokoro: { url: "http://localhost:8880", autoStart: true, image: "ghcr.io/remsky/kokoro-fastapi-gpu:latest" },
   devVoice: {
     url: "http://127.0.0.1:8899", autoStart: true,

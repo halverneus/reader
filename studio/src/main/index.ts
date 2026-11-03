@@ -15,6 +15,7 @@ import { registerPostIpc } from "./post";
 import { registerDiagnoseIpc } from "./diagnose";
 import { startBridge, stopBridge, setOpenScript, registerBridgeIpc } from "./bridge";
 import { installContextMenu } from "./context-menu";
+import { loadAutorunPlan, registerAutorunIpc } from "./autorun";
 
 let win: BrowserWindow | null = null;
 let headlessMode = false;
@@ -108,7 +109,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("fs:exists", (_e, p) => fs.existsSync(p));
   ipcMain.handle("outro:preview", () => { const w = new BrowserWindow({ width: 1280, height: 720, title: "Outro preview", backgroundColor: "#04070f", useContentSize: true }); w.setMenuBarVisibility(false); w.loadFile(path.join(__dirname, "../renderer/outro.html"), { query: { preview: "1" } }); w.webContents.on("did-finish-load", () => w.webContents.insertCSS("html,body{width:100%;height:100%}#stage{transform:scale(calc(100vw / 1920));transform-origin:0 0}")); });
   ipcMain.handle("config:get:override", () => process.env.STUDIO_OPEN ?? null);
-  registerScriptIpc(); registerTtsIpc(); registerVmIpc(); registerSessionIpc(); registerObsIpc(); registerCaptureIpc(); registerAssistIpc(); registerPostIpc(); registerDiagnoseIpc();
+  registerScriptIpc(); registerTtsIpc(); registerVmIpc(); registerSessionIpc(); registerObsIpc(); registerCaptureIpc(); registerAssistIpc(); registerPostIpc(); registerDiagnoseIpc(); registerAutorunIpc();
+  loadAutorunPlan();
   // outside tools ask what is open before they write to it; GUI only
   ipcMain.handle("bridge:state", (_e, f: string | undefined, dirty: boolean, hash?: string) => setOpenScript(f, dirty, hash));
   // guiMode only: a --diagnose or STUDIO_SHOT run must not overwrite the
