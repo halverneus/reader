@@ -312,6 +312,18 @@ async function runBatchInner(paths: string[], opts: RunOptions, onProgress: (ste
  */
 export async function renderBatch(dirs: string[], onProgress: (steps: RunStep[]) => void): Promise<RunStep[]> {
   cancelled = false;
+  // Nothing here captures the screen, so a sleeping monitor cannot ruin the
+  // footage — but Glitch and the avatar are rendered by stepping offscreen
+  // BrowserWindows, and a renderer on a sleeping display is exactly the kind
+  // of thing Chromium throttles. Hours of work, unattended, for the price of
+  // one call: hold it awake.
+  await window.studio.invoke("host:keepAwake", true).catch(() => {});
+  try {
+    return await renderBatchInner(dirs, onProgress);
+  } finally { await window.studio.invoke("host:keepAwake", false).catch(() => {}); }
+}
+
+async function renderBatchInner(dirs: string[], onProgress: (steps: RunStep[]) => void): Promise<RunStep[]> {
   const autoRender = !!getState().config?.post?.autoRender;
   const steps: RunStep[] = dirs.map((d) => ({ path: d, label: d.split("/").slice(-2).join(" / "), state: "pending", dir: d }));
   const emit = () => { const copy = [...steps]; onProgress(copy); for (const w of watchers) try { w(copy, active); } catch {} };
