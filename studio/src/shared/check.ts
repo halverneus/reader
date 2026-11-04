@@ -15,7 +15,7 @@
 //            automatically.
 import { parseScript, validate as hardValidate, cleanText, splitMoodTags, markers, entriesAt, type Script, type Entry } from "./script";
 import { auditKeystrokes } from "./keys";
-import { firstVisibleAt, gestureLength } from "../../glitch/dev-hands-data";
+import { firstVisibleAt, gestureLength, holdAt, GESTURE_HOME } from "../../glitch/dev-hands-data";
 
 export type Severity = "error" | "advice";
 export interface Finding {
@@ -365,8 +365,14 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
       const tail = clean.slice(h.charIndex).trim().slice(0, 40);
       if (left < appearsAt)
         err("hand", `[hand ${h.hand}] keeps the hand away for the first ${appearsAt.toFixed(2)} s, but only about ${left.toFixed(1)} s of this line is left after the tag ("${tail}"), so the hand never appears on screen. Move the tag earlier — onto the words that lead up to the beat.`, e, tail);
-      else if (left < gestureLength(h.hand) * 0.8)
+      else if (holdAt(h.hand) == null && left < gestureLength(h.hand) * 0.8)
         adv("hand", `[hand ${h.hand}] runs ${gestureLength(h.hand).toFixed(1)} s and only about ${left.toFixed(1)} s of this line is left after the tag, so it will still be returning to rest when the line ends.`, e, tail);
+      // A held gesture waits at its hold keyframe until something releases it.
+      // Unreleased, the arm simply stays up — through the next line, the next
+      // demo, as long as it takes for another gesture or the end of the take.
+      if (holdAt(h.hand) != null && h.hand !== GESTURE_HOME
+          && !hands.some((o) => o.charIndex > h.charIndex && (o.hand === GESTURE_HOME || holdAt(o.hand) != null)))
+        adv("hand", `[hand ${h.hand}] is a held gesture and nothing releases it in this line: the arm stays up until the next gesture or the end of the take. Add [hand home] where it should come down.`, e, tail);
     }
   }
 
