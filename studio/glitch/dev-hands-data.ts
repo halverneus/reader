@@ -132,6 +132,24 @@ export const GESTURE_HOME = "home";
 /** How long a gesture runs end to end. A held one never gets there on its
  *  own, so the driver asks `holdAt` instead. */
 export const gestureLength = (name: string) => GESTURES[name]?.keys.at(-1)?.t ?? 0;
+/** When the hand first becomes visible, in seconds from the start of the
+ *  gesture. Several gestures open with the arm still away (`vis: 0`) so the
+ *  move has a wind-up: `signoff` keeps it hidden for a second and a quarter
+ *  before the point rises. That lead is the whole reason a tag has to be
+ *  placed on the words BEFORE the beat it lands on, and the reason the script
+ *  checker can tell when a tag has been put too late to be seen. */
+export const firstVisibleAt = (name: string): number => {
+  const keys = GESTURES[name]?.keys ?? [];
+  for (let i = 0; i < keys.length; i++) {
+    if ((keys[i].p.vis ?? 0) > 0) {
+      // it fades in between the previous key and this one, so it starts to
+      // show as soon as the previous key is past
+      return i > 0 ? keys[i - 1].t : keys[i].t;
+    }
+  }
+  return 0;
+};
+
 /** When a held gesture stops and waits, or null if it plays straight through. */
 export const holdAt = (name: string): number | null => {
   const g = GESTURES[name];

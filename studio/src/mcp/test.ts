@@ -3,10 +3,11 @@
 // Every case here is something that actually went wrong once. The fragment
 // cases are lines Jeromy flagged by hand; the "must pass" ones are lines an
 // over-eager rule tried to rewrite, which is the more expensive failure.
-import { verbless, runup, checkText, COURSEWORK, errorsOf } from "../shared/check";
+import { verbless, runup, checkText, checkScript, COURSEWORK, errorsOf } from "../shared/check";
 import { Editor, replayText, SUSPICIOUS } from "../shared/wb";
 import { keyStatus } from "../shared/keys";
 import { deckUrlFor, stageSteps } from "../shared/stage";
+import { firstVisibleAt } from "../../glitch/dev-hands-data";
 import { cameraPlan, parseScript, parseStep, serializeScript, splitMoodTags, speechChunks, validate, wrap70, rewrap, rewrapEntry, type Entry } from "../shared/script";
 import { applyGestures, GESTURES, gestureNames, gestureLength, holdAt, HOME } from "../../glitch/dev-hands-data";
 import { markerDiff } from "../shared/diff";
@@ -829,6 +830,44 @@ group("which lessons can run with nobody in the room");
   to: "real"
 `).script;
   ok(!selfDriving(comesBack), "an episode that hands the shot back to the real Dev needs him there");
+}
+
+group("a gesture needs room to play");
+{
+  // Week 07 lesson 02 shipped a take and a 50-minute render with no sign-off,
+  // because [hand signoff] was tagged on "Do it!" — the beat it should LAND
+  // on. The gesture keeps the hand away for its first 1.25 s, so it arrived
+  // after the line ended and the outro had the screen. Nothing said a word.
+  ok(firstVisibleAt("signoff") >= 1.0, "signoff has a wind-up before the hand shows", String(firstVisibleAt("signoff")));
+  ok(firstVisibleAt("greeting") < 0.5, "greeting shows its hand almost at once", String(firstVisibleAt("greeting")));
+
+  const late = parseScript(`script:
+- type: "avatar"
+  start: 100
+  end: 200
+  to: "avatar"
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "Don't just watch it... [hand signoff] Do it!"
+`).script;
+  const hits = checkScript(late).filter((x) => x.rule === "hand");
+  ok(hits.some((h) => h.severity === "error"), "a gesture tagged on the beat it lands on is an error", JSON.stringify(hits.map((h) => h.msg)));
+
+  const early = parseScript(`script:
+- type: "avatar"
+  start: 100
+  end: 200
+  to: "avatar"
+- type: "line"
+  actor: "Dev"
+  start: 200
+  end: 300
+  text: "[hand signoff] Don't just watch it... Do it, and keep doing it until it is yours!"
+`).script;
+  ok(!checkScript(early).some((x) => x.rule === "hand" && x.severity === "error"),
+     "the same gesture with the words to cover its wind-up is fine");
 }
 
 group("staging the guest between lessons");

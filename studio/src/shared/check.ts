@@ -15,6 +15,7 @@
 //            automatically.
 import { parseScript, validate as hardValidate, cleanText, splitMoodTags, markers, entriesAt, type Script, type Entry } from "./script";
 import { auditKeystrokes } from "./keys";
+import { firstVisibleAt, gestureLength } from "../../glitch/dev-hands-data";
 
 export type Severity = "error" | "advice";
 export interface Finding {
@@ -336,6 +337,36 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
       const hand = s.entries.find((e) => e.type === "line" && (e as any).actor === "Dev" && splitMoodTags((e as any).text).hands.length);
       const who = dev ?? hand;
       if (who) err("avatar", `marker ${who.start} is addressed to avatar Dev, but the script never swaps him in: add an avatar entry (to: avatar) before it`, who);
+    }
+  }
+
+  // ── a gesture with no room left to play
+  //
+  // A `[hand …]` tag starts the move at that word, and several gestures open
+  // with the arm still away so the raise has a wind-up: `signoff` hides the
+  // hand for 1.25 s before the point rises. Put the tag on the beat you want
+  // the hand to LAND on and the hand arrives after the line has finished —
+  // and if the outro follows, as it does at the end of every lesson, nobody
+  // ever sees it. That is exactly what happened to Week 07 lesson 02: the
+  // sign-off was tagged on "Do it!", which left 0.4 s of a gesture that needs
+  // 1.25 s, and it cost a full take and a 50-minute render to notice.
+  //
+  // Dev reads at about 17.6 characters a second (measured over 31 lines of
+  // that take). This uses a deliberately slow 15 to be generous with the time
+  // remaining, so a warning here means the gesture really has run out of line.
+  const CHARS_PER_SEC = 15;
+  for (const e of s.entries) {
+    if (e.type !== "line" || (e as any).actor !== "Dev") continue;
+    const { clean, hands } = splitMoodTags((e as any).text);
+    for (const h of hands) {
+      const appearsAt = firstVisibleAt(h.hand);
+      if (!appearsAt) continue;                       // shows at once: nothing to miss
+      const left = (clean.length - h.charIndex) / CHARS_PER_SEC;
+      const tail = clean.slice(h.charIndex).trim().slice(0, 40);
+      if (left < appearsAt)
+        err("hand", `[hand ${h.hand}] keeps the hand away for the first ${appearsAt.toFixed(2)} s, but only about ${left.toFixed(1)} s of this line is left after the tag ("${tail}"), so the hand never appears on screen. Move the tag earlier — onto the words that lead up to the beat.`, e, tail);
+      else if (left < gestureLength(h.hand) * 0.8)
+        adv("hand", `[hand ${h.hand}] runs ${gestureLength(h.hand).toFixed(1)} s and only about ${left.toFixed(1)} s of this line is left after the tag, so it will still be returning to rest when the line ends.`, e, tail);
     }
   }
 
