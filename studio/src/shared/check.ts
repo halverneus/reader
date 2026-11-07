@@ -356,6 +356,31 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
       err("id", `${who} says "${plural[0]}"; the plural is spoken "eye-deez" and has to be written that way`, e);
   }
 
+  // ── Glitch slid to the bottom and left there
+  //
+  // `slide` takes "top" | "bottom" | "hide" | "show", and "show" is a
+  // VISIBILITY change: vex.slide() handles it and returns before it touches
+  // y at all. So "bottom" then "show" leaves him visible and still at the
+  // bottom for the rest of the take. Weeks 06 and 07 pair bottom with top
+  // every time; Week 08 was written with "show" and the bug shipped into a
+  // recording on 2026-11-07.
+  {
+    const slides = s.entries.filter((e) => e.type === "slide" && (e as any).actor === "Glitch") as any[];
+    let down: any = null;
+    for (const e of slides) {
+      if (e.to === "bottom") {
+        if (down) adv("slide", `Glitch is sent to the bottom at ${e.start} and was already down from ${down.start}`, e);
+        down = e;
+      } else if (e.to === "top") {
+        down = null;
+      } else if (e.to === "show" && down) {
+        err("slide", `Glitch was slid to the bottom at ${down.start} and this is "show", which only changes visibility and leaves him at the bottom. Use "top" to bring him back up`, e);
+        down = null;
+      }
+    }
+    if (down) adv("slide", `Glitch is slid to the bottom at ${down.start} and never comes back up`, down);
+  }
+
   // ── the avatar swap
   // A swap only means anything if something swaps back, and the "glitch" mood
   // it wears is applied by the renderer, not by the author, so a hand-written

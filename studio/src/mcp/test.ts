@@ -259,6 +259,17 @@ group("replay");
 }
 
 // ── ALL-CAPS in a spoken line ───────────────────────────────────────────────
+group("Glitch left at the bottom");
+{
+  const sl = (to1: string, to2: string) =>
+    `script:\n  - type: slide\n    actor: Glitch\n    start: 200\n    end: 210\n    to: ${to1}\n` +
+    `  - type: slide\n    actor: Glitch\n    start: 300\n    end: 310\n    to: ${to2}\n`;
+  const slide = (a: string, b: string) => errorsOf(checkText(sl(a, b))).filter((x) => x.rule === "slide");
+  ok(slide("bottom", "show").length === 1,
+     "show after bottom is the bug: it changes visibility and leaves him down there");
+  ok(slide("bottom", "top").length === 0, "bottom then top is the correct pair");
+}
+
 group("caps in Glitch's lines");
 {
   const g = (text: string) => `script:
