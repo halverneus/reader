@@ -91,6 +91,22 @@ export function registerSessionIpc() {
   ipcMain.handle("session:drop", (_e, { srcs }) => (currentSession() ? capture.dropSources(srcs ?? []) : []));
   ipcMain.handle("session:event", (_e, ev) => pushEvent(ev));
   ipcMain.handle("session:current", () => currentSession());
+  /** Bytes written to the screen recording so far.
+   *
+   *  The only honest answer to "is this actually recording?". A ScreenCast
+   *  node that negotiated against a sleeping output stays "live", emits no
+   *  frames, and leaves a 0-byte file after a take that read every line of
+   *  the script (2026-11-04). Thumbnails were the wrong thing to ask: they
+   *  come and go with the preview. The file does not lie. */
+  ipcMain.handle("session:screenBytes", () => {
+    const s = currentSession();
+    if (!s?.dir) return null;
+    try {
+      const f = fs.readdirSync(s.dir).filter((n) => /^desktop.*\.(mkv|mp4)$/.test(n));
+      if (!f.length) return null;
+      return Math.max(...f.map((n) => { try { return fs.statSync(path.join(s.dir, n)).size; } catch { return 0; } }));
+    } catch { return null; }
+  });
   // the Kdenlive generator drops a "camera froze here" guide at each of these
   capture.onFreeze = (src, reason, at) => pushEvent({ kind: "freeze", t: Math.round(at), src, reason });
   // a source that ended on purpose: post needs to read the short track as

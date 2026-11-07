@@ -13,7 +13,7 @@
 //            reference a public viewer cannot resolve).
 //   advice - a judgment call for a human. Printed, never fatal, never acted on
 //            automatically.
-import { parseScript, validate as hardValidate, cleanText, splitMoodTags, markers, entriesAt, type Script, type Entry } from "./script";
+import { parseScript, validate as hardValidate, cleanText, splitMoodTags, markers, entriesAt, cameraPlan, type Script, type Entry } from "./script";
 import { auditKeystrokes } from "./keys";
 import { firstVisibleAt, gestureLength, holdAt, GESTURE_HOME } from "../../glitch/dev-hands-data";
 
@@ -208,6 +208,11 @@ const MUST_FLASH = new Set(["eyeroll", "cringe"]);
  *  pronunciation of its own; the rest are acronyms read as words anyway. */
 // NULL is deliberately absent: the house style is "null" lowercase in a
 // spoken line, so a capitalised one is a real hit.
+// "OH" was briefly exempted on 2026-11-07 because one matched-length pair
+// rendered identically to "Oh". Jeromy has heard Kokoro say "oh aitch" for
+// it, apparently at random. A single render can only ever prove that two
+// inputs DIFFER; it can never prove they are safe, because the model does
+// not have to make the same choice twice. "OH" stays flagged.
 export const CAPS_OK = new Set(["ID", "IDS", "SQL", "OK", "AI", "CPU", "GPU", "API", "CSV", "JSON", "URL", "PDF", "HTML", "UTC"]);
 
 export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
@@ -306,12 +311,33 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
   // time; the house style is the keyword quoted and lowercase, which reads
   // correctly AND tells the listener it is a keyword. "ID" is the standing
   // exception: it is DELIBERATELY uppercase and has its own pronunciation.
+  //
+  // THE OUTRO COUNTS. Glitch reads the outro too, and its phase text is the
+  // one place this has actually shipped: Week 07 Lesson 9 says "Next time we
+  // cover IF" and the published video says "eye eff". The rule used to look at
+  // `line` entries only, so nothing caught it. A phase's `title`/`subtitle`
+  // are card text on screen, not speech, and stay exempt.
+  // DEV COUNTS TOO, BUT ONLY WHEN A MACHINE READS HIM. Through Week 06 Jeromy
+  // read Dev's lines on camera, so "SELECT" in the text was just a word on a
+  // teleprompter and 97 of them shipped fine. From Week 07 the avatar reads
+  // them through the clone, and on 2026-11-07 Week 08 Lesson 1 recorded "the
+  // eye eff function". So Dev's lines are checked exactly when this is an
+  // avatar episode, which is the case where TTS speaks them.
+  const avatarReadsDev = cameraPlan(s).srcs.length === 1;
+  const spoken: { text: string; e: Entry }[] = [];
   for (const e of s.entries) {
-    if (e.type !== "line" || (e as any).actor !== "Glitch") continue;
-    const text = cleanText((e as any).text);
+    if (e.type === "line") {
+      const actor = (e as any).actor;
+      if (actor === "Glitch" || (actor === "Dev" && avatarReadsDev))
+        spoken.push({ text: (e as any).text, e });
+    } else if (e.type === "outro")
+      for (const p of (e as any).phases ?? []) if (p?.text) spoken.push({ text: p.text, e });
+  }
+  for (const { text: raw, e } of spoken) {
+    const text = cleanText(raw);
     const caps = [...new Set((text.match(/\b[A-Z]{2,}\b/g) ?? []).filter((w) => !CAPS_OK.has(w)))];
     if (caps.length)
-      err("caps", `Glitch says ${caps.map((c) => `"${c}"`).join(", ")} in capitals; the voice spells those out. Write them quoted and lowercase, as ${caps.map((c) => `"${c.toLowerCase()}"`).join(", ")}`, e);
+      err("caps", `${(e as any).actor ?? "the outro"} says ${caps.map((c) => `"${c}"`).join(", ")} in capitals; the voice spells those out. Write them quoted and lowercase, as ${caps.map((c) => `"${c.toLowerCase()}"`).join(", ")}`, e);
   }
 
   // ── the avatar swap

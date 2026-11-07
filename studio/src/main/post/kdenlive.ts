@@ -5,7 +5,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { loadConfig, type Config } from "../config";
 import { parseScript, cleanText, entriesAt } from "../../shared/script";
-import { COLD_OPEN_AT, firstSpeechStart, lastSpeechEnd, openerTrim, voiceSpans, type Span } from "../../shared/timeline";
+import { COLD_OPEN_AT, firstSpeechStart, lastSpeechEnd, openerTrim, ownsCue, voiceSpans, type Span } from "../../shared/timeline";
 import { ffprobeJson, rmsEnvelope, percentileDb } from "./exec";
 import { findCam, findDesktop } from "./matte";
 import { outroSpan } from "./outro-render";
@@ -454,6 +454,15 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
   let devAt = { x: devRect.x, y: devRect.y };
   for (const p of pieces) {
     const s = p.seg, speed = p.speed, len = lenOf(p), at = p.at;
+    // A piece's PICTURE may run past its segment: the intro and the outro
+    // hide their cut by letting the take underneath play on. Its SOUND and
+    // its cues must not. Anything after the segment boundary belongs to the
+    // next take, and placing it here plays it twice — on an avatar episode
+    // there is no reading gap at the Roll Intro, so the 1.5 s of run-on ran
+    // straight into the lesson's first line: Dev said "Every user-defined
+    // vari...", the intro cut him off, and then he said it again
+    // (2026-11-04, found in the finished W07L02).
+    const own1 = Math.min(p.src1, s.t1);
     const inOf = (t: number) => (speed ? Math.round(fr(t) / speed) : fr(t));
     const atOf = (t: number) => at + Math.round(fr(t - p.src0) / (speed ?? 1));
     P.place("glV", { clip: cDesk, at, in: inOf(p.src0), len, speed });
@@ -462,7 +471,7 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
     // an all-avatar episode records no camera at all.
     const fullFrame = introMarker >= 0 && s.marker < introMarker; // cold open: Dev big
     const keys: { at: number; x: number; y: number; w: number; h: number }[] = fullFrame ? [] : [{ at: 0, ...devRect, ...devAt }];
-    for (const e of evs.filter((e: any) => e.kind === "slide" && e.actor === "Dev" && rel(e.t) >= p.src0 && rel(e.t) < p.src1)) {
+    for (const e of evs.filter((e: any) => e.kind === "slide" && e.actor === "Dev" && rel(e.t) >= p.src0 && rel(e.t) < own1)) {
       const k = atOf(rel(e.t)) - at; const over = Math.max(1, fr((e.over ?? 600) / 1000));
       const to = e.to === "left" ? { x: cfg.dev.leftX, y: devRect.y } : e.to === "hide" ? { x: devRect.x, y: 1080 } : { x: devRect.x, y: devRect.y };
       const from = keys.at(-1) ?? devAt;
@@ -510,12 +519,12 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
       // no sound from before the take began (pre-roll under the intro may reach into an earlier take)
       const m0 = Math.max(p.src0, s.t0), mAt = atOf(m0), inM = inOf(m0 + micOffset);
       // like the camera, the mic file can end at the swap
-      const micLen = Math.max(0, Math.min(at + len - mAt, cMic.frames - inM));
+      const micLen = Math.max(0, Math.min(atOf(own1) - mAt, at + len - mAt, cMic.frames - inM));
       if (inM >= 0 && micLen > 0) P.place("devA", { clip: cMic, at: mAt, in: inM, len: micLen, speed });
     }
     if (cGlitch) P.place("faceV", { clip: cGlitch, at, in: inOf(p.src0), len, speed });
     for (const v of voice) {
-      const t = rel(v.t); if (t < Math.max(p.src0, s.t0) || t >= p.src1) continue;
+      const t = rel(v.t); if (!ownsCue(t, { src0: p.src0, src1: p.src1, t0: s.t0, t1: s.t1 })) continue;
       const c = await P.addClip(v.audio, "audio", path.basename(v.audio));
       const vAt = atOf(t); const l = Math.min(c.frames, at + len - vAt);
       if (l > 0) P.place(v.actor === "Dev" ? "avA" : "glA", { clip: c, at: vAt, in: 0, len: l });
@@ -524,7 +533,7 @@ export async function buildProject(dir: string, session: any, log: Log): Promise
     const first = entriesAt(script, s.marker).find((e) => e.type === "line") as any;
     P.guides.push({ comment: first ? `${first.actor}: ${cleanText(first.text).replace(/\n/g, " ").slice(0, 32)}` : `marker ${s.marker}`, pos: gPos, type: 0 });
     if (s.take > 1) P.guides.push({ comment: `take ${s.take}`, pos: gPos, type: 5 });
-    for (const f of freezes) { const t = rel(f.t); if (t >= p.src0 && t < p.src1) P.guides.push({ comment: "camera froze here", pos: atOf(t), type: 8 }); }
+    for (const f of freezes) { const t = rel(f.t); if (t >= p.src0 && t < own1) P.guides.push({ comment: "camera froze here", pos: atOf(t), type: 8 }); }
     if (speed) P.guides.push({ comment: `typing ×${speed}`, pos: gPos, type: 1 });
   }
   if (cOut && outro) {

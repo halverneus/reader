@@ -12,7 +12,7 @@
 // between lessons so the "Activate Windows" watermark never appears, and
 // carrying on to the next lesson when one fails instead of stopping the night.
 
-import { loadScriptFile } from "./script-io";
+import { clonedTexts, loadScriptFile } from "./script-io";
 import { getState, toast } from "./store";
 import { production } from "./production";
 import { deckUrlFor, stageSteps } from "../shared/stage";
@@ -111,6 +111,45 @@ export async function screenLuma(): Promise<number | null> {
   } catch { return null; }
 }
 
+/** Is the screen recording actually growing on disk?
+ *
+ *  The only honest check, and the one that matters: a ScreenCast node that
+ *  negotiated against a sleeping output stays "live", produces nothing, and
+ *  leaves 0 bytes after a full take. Thumbnails were the wrong proxy — they
+ *  belong to a preview that is not always running, and asking for them
+ *  refused two perfectly good runs before this was written (2026-11-05).
+ *  Returns true the moment the file has real data in it.
+ */
+export async function screenIsWriting(timeoutMs = 15_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const n: number | null = await window.studio.invoke("session:screenBytes").catch(() => null);
+    if (n != null && n > 65536) return true;
+    if (Date.now() > deadline) return n == null;   // cannot tell: do not block the run
+    await sleep(1000);
+  }
+}
+
+/** Is the source actually producing pictures?
+ *
+ *  The thumbnail comes off a live branch of the same GStreamer pipeline that
+ *  writes the file, so a thumbnail is proof of frames and no thumbnail is
+ *  proof of none. That is what catches the stream that negotiated against a
+ *  sleeping output: "live", and 0 bytes at the end of the take.
+ *
+ *  It has to POLL. The first thumbnail lands a moment after the stream comes
+ *  up, and checking once refuses a source that was about to be fine — which
+ *  is exactly what the first version of this did to Jeromy (2026-11-05).
+ */
+export async function screenHasFrames(timeoutMs = 15_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if ((await screenLuma()) != null) return true;
+    if (Date.now() > deadline) return false;
+    await sleep(1000);
+  }
+}
+
 /** True only when we are confident the picture is black — an unreadable or
  *  missing thumbnail is not evidence of anything, and must not block a run. */
 export async function screenLooksBlack(): Promise<boolean> {
@@ -145,6 +184,15 @@ const watchers = new Set<(steps: RunStep[], running: boolean) => void>();
 export function watchRun(f: (steps: RunStep[], running: boolean) => void) { watchers.add(f); return () => { watchers.delete(f); }; }
 export function runActive() { return active; }
 export function cancelRun() { cancelled = true; }
+
+/** Stop the take that is running RIGHT NOW and abandon the rest of the batch.
+ *  `cancelRun` only stops the NEXT lesson from starting, which is no help when
+ *  the thing on screen is already wrong (2026-11-05). */
+export async function abortRun() {
+  cancelled = true;
+  try { production.abort("stopped"); } catch {}
+  try { await production.stopRecording(); } catch {}
+}
 export function runCancelled() { return cancelled; }
 
 /** Keystrokes that put the VM desktop back where a take expects it. Deliberately
@@ -181,6 +229,34 @@ async function prepVm(): Promise<void> {
   await window.studio.invoke("keys:run", { entryId: `runner-prep-${Date.now()}`, steps: PREP_STEPS, speed: 6, dryRun: !production.st.sendKeys });
 }
 
+/** Wait until every line Dev is about to read is already in the voice cache.
+ *
+ *  Opening a script warms the cache, but warming is fire-and-forget and his
+ *  cloned voice synthesises at about real time. Press record straight away and
+ *  the engine asks for lines the queue has not reached yet; each one arrives a
+ *  synthesis later, and the wait is recorded. W07L03 shipped with three of
+ *  them — 9.5 s, 6.9 s and 6.7 s of Dev saying nothing between Glitch's
+ *  question and his answer (found in review, 2026-11-04).
+ *
+ *  Returns a line for the log. Never throws: a voice service that cannot be
+ *  reached is not a reason to abandon a night's recording, and a cold cache
+ *  only costs the pauses it used to cost. */
+async function waitForVoice(timeoutMs = 20 * 60_000, say?: (s: string) => void): Promise<string> {
+  const texts = clonedTexts(getState().script);
+  if (!texts.length) return "no cloned lines";
+  const t0 = Date.now();
+  let last = -1;
+  for (;;) {
+    const h: any = await window.studio.invoke("devvoice:have", texts).catch((e: any) => ({ error: e?.message }));
+    if (!h || h.error) return `could not ask the voice service (${h?.error ?? "no answer"}) — going ahead`;
+    if (h.pending === 0) return `voice cache warm: ${h.total} line${h.total === 1 ? "" : "s"} ready${last > 0 ? ` after ${Math.round((Date.now() - t0) / 1000)}s` : ""}`;
+    if (h.pending !== last) { last = h.pending; say?.(`waiting for the voice cache: ${h.ready}/${h.total} rendered`); }
+    if (Date.now() - t0 > timeoutMs) return `voice cache still ${h.pending} short after ${Math.round(timeoutMs / 60000)} min — recording anyway`;
+    if (cancelled) return "cancelled while warming";
+    await sleep(3000);
+  }
+}
+
 /** Run one lesson end to end. Throws with a human-readable reason. */
 async function runOne(path: string, opts: RunOptions, set: (p: Partial<RunStep>) => void): Promise<void> {
   await loadScriptFile(path);
@@ -203,11 +279,31 @@ async function runOne(path: string, opts: RunOptions, set: (p: Partial<RunStep>)
   // Per lesson, not just once per batch: the display can fall asleep in the
   // gap between takes, and a black lesson looks exactly like a good one until
   // somebody opens the file.
+  // A source can be "live" and still deliver nothing: if the output was asleep
+  // when the stream was negotiated, pipewiresrc fails on the format
+  // (-22) forever, the take runs its whole length and desktop.mkv is 0 bytes.
+  // No thumbnail means no frames, and no frames means no video (2026-11-04).
   if (await screenLooksBlack()) throw new Error("the screen source is black — the monitor the VM window is on is asleep, so this would record nothing");
+
+  // Every one of Dev's lines rendered before the camera rolls, or the gaps
+  // where the queue had not caught up get recorded as silence.
+  const voice = await waitForVoice(20 * 60_000, (l) => { window.studio.invoke("autorun:log", l).catch(() => {}); });
+  window.studio.invoke("autorun:log", voice).catch(() => {});
 
   set({ state: "recording" });
   await production.startRecording();
   if (!production.st.recording) throw new Error("recording did not start");
+
+  // Prove the source is really producing pictures — but only now. The
+  // thumbnails come off the recorder's own preview branch, so there are none
+  // at all until a take is running: checking beforehand refused every run
+  // (2026-11-05, twice). This costs twelve seconds and catches the stream
+  // that negotiated against a sleeping output, which otherwise reads every
+  // line of the script into a 0-byte file.
+  if (!(await screenIsWriting(15_000))) {
+    await production.stopRecording();
+    throw new Error("the screen recording is still 0 bytes after 15 s — this take would be an empty file. Wake the displays (kscreen-doctor --dpms on) and restart Studio: the stream is negotiated at launch");
+  }
 
   // Wait for the script to run off its last marker. The outro is part of the
   // final marker's waits, so by the time this fires the credits have played.
@@ -222,15 +318,32 @@ async function runOne(path: string, opts: RunOptions, set: (p: Partial<RunStep>)
     const timer = setTimeout(() => { off(); reject(new Error(`still running after ${Math.round(opts.perLessonTimeoutMs / 60000)} min — stopped it`)); }, opts.perLessonTimeoutMs);
   });
   production.advance();            // marker -1 → the first marker; it self-drives from there
-  try { await finished; } finally { await production.stopRecording(); }
+  // Ask WHILE it is still recording. `session:current` is null the moment the
+  // session closes, and the fallback below is only a guess (2026-11-04: it
+  // guessed wrong and posted an old take of a different lesson).
+  let recordedDir: string | null = null;
+  try {
+    await finished;
+  } finally {
+    recordedDir = await window.studio.invoke("session:current").then((m: any) => m?.dir ?? null).catch(() => null);
+    await production.stopRecording();
+  }
 
   if (cancelled) throw new Error("cancelled");
 
   if (opts.post) {
     set({ state: "post" });
-    const dir = await window.studio.invoke("session:current").then((m: any) => m?.dir).catch(() => null);
-    // session:current is null once stopped, so fall back to the newest session
-    const target = dir ?? (await window.studio.invoke("post:sessions").catch(() => []))[0]?.dir;
+    // The folder was read above, while the session was still open. The list is
+    // only a fallback, and `post:sessions` is sorted by PATH, so its first row
+    // is the highest-numbered lesson rather than the newest take — which is
+    // how a good take of lesson 3 went unposted while an old take of lesson 5
+    // was re-rendered. Check the fallback actually belongs to this script.
+    let target = recordedDir;
+    if (!target) {
+      const lesson = path.split("/").slice(-2, -1)[0] ?? "";
+      const rows: any[] = await window.studio.invoke("post:sessions").catch(() => []);
+      target = (lesson && rows.find((r) => String(r.dir).includes(lesson))?.dir) || null;
+    }
     if (!target) throw new Error("recorded, but the session folder could not be found for post");
     set({ dir: target });
     await window.studio.invoke("post:run", target, "all");

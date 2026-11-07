@@ -13,7 +13,7 @@ import { applyGestures, GESTURES, gestureNames, gestureLength, holdAt, HOME } fr
 import { markerDiff } from "../shared/diff";
 import { crossRepeats } from "../shared/across";
 import { MOODS, MOOD_NAMES } from "../../glitch/moods";
-import { COLD_OPEN_FIRST_WORD, COLD_OPEN_AT, FPS, firstSpeechStart, lastSpeechEnd, openerTrim, voiceSpans, type Span } from "../shared/timeline";
+import { COLD_OPEN_FIRST_WORD, COLD_OPEN_AT, FPS, firstSpeechStart, lastSpeechEnd, openerTrim, ownsCue, voiceSpans, type Span } from "../shared/timeline";
 
 let pass = 0, fail = 0;
 const ok = (cond: boolean, label: string, detail = "") => {
@@ -279,6 +279,22 @@ group("caps in Glitch's lines");
   ok(caps("It says the line item's invoice ID equals the outer invoice's ID.").length === 0, "ID stays uppercase: it is deliberate");
   ok(caps("Two is different from NULL, so nothing comes back.").length === 1, "NULL is NOT exempt; the house style is lowercase");
   ok(caps("The optimizer knows the answer.").length === 0, "ordinary prose passes");
+  ok(caps("Wait so. Oh! OH. That is what it means.").length === 1,
+     "OH is flagged: Kokoro says 'oh aitch' for it at random, so one clean render proves nothing");
+
+  // The outro is Glitch too, and it is the only place this has shipped: Week 07
+  // Lesson 9's "Next time we cover IF" is "eye eff" in the published video.
+  const outroScript = (phaseText: string) =>
+    `script:\n  - type: outro\n    start: 9100\n    end: 9200\n    next: CASE\n` +
+    `    phases:\n      - phase: next\n        text: ${JSON.stringify(phaseText)}\n`;
+  const outroCaps = (t: string) =>
+    errorsOf(checkText(outroScript(t))).filter((x) => x.rule === "caps");
+  ok(outroCaps("Next time we cover IF, where a database makes choices.").length === 1,
+     "capitals in an outro phase are caught, not just in lines");
+  ok(outroCaps("Next time we cover the if keyword, where a database makes choices.").length === 0,
+     "the lowercase outro phase passes");
+  ok(outroCaps("Next time we cover the invoice ID lesson.").length === 0,
+     "ID is still exempt inside an outro phase");
   // Dev reads his own lines, so capitals there are emphasis, not a defect
   const devCaps = `script:
 - type: "editor"
@@ -291,7 +307,21 @@ group("caps in Glitch's lines");
   end: 300
   text: "NOT IN has one correct fix and this is it."
 `;
-  ok(errorsOf(checkText(devCaps)).filter((x) => x.rule === "caps").length === 0, "Dev may use capitals: he reads his own lines");
+  ok(errorsOf(checkText(devCaps)).filter((x) => x.rule === "caps").length === 0,
+     "Dev may use capitals when HE reads the line on camera");
+
+  // ...but not when the avatar reads it through the clone. W08 L01 shipped
+  // "the eye eff function" on 2026-11-07 because this case was not covered.
+  const avatarDev = (text: string) =>
+    `script:\n  - type: avatar\n    start: 100\n    end: 200\n    to: avatar\n` +
+    `  - type: line\n    actor: Dev\n    start: 200\n    end: 300\n    text: ${JSON.stringify(text)}\n`;
+  const avatarCaps = (t: string) => errorsOf(checkText(avatarDev(t))).filter((x) => x.rule === "caps");
+  ok(avatarCaps("This is the IF function.").length === 1,
+     "an avatar episode checks Dev's capitals: the clone reads them letter by letter");
+  ok(avatarCaps('This is the "if" function.').length === 0,
+     "quoted and lowercase is the fix for Dev too");
+  ok(avatarCaps("The invoice ID is the key.").length === 0,
+     "ID stays exempt for Dev as well");
 }
 
 // ── marker diff (what the live GUI update highlights) ───────────────────────
@@ -983,6 +1013,47 @@ group("avatar Dev's hands");
     }
     ok(g.label.length > 10, `${name} says what it is for`);
   }
+}
+
+
+group("a take shows more than it owns");
+{
+  // The real numbers out of W07L02 (2026-11-04). The cold open's last word
+  // ends at 30.44 s and the Roll Intro marker falls at 30.56; the lesson's
+  // first line starts 0.16 s later, because nobody is reading and nothing
+  // waits. The cold open's picture is then told to run on to 31.94 s so the
+  // intro has something underneath to fade over.
+  const coldOpen = { src0: 0, src1: 31.94, t0: 0, t1: 30.56 };
+  const lesson = { src0: 28.60, src1: 120, t0: 30.56, t1: 120 };
+  const firstLine = 30.60;
+
+  ok(!ownsCue(firstLine, coldOpen), "the lesson's first line does not belong to the cold open it plays under");
+  ok(ownsCue(firstLine, lesson), "it belongs to the take it was recorded in");
+  ok(ownsCue(30.40, coldOpen) && !ownsCue(30.40, lesson), "the cold open's own last word is still its own");
+  ok(!ownsCue(29.00, lesson), "and the lesson does not claim what its pre-roll merely shows");
+
+  // the ordinary case: no run-on, no pre-roll, nothing changes
+  const plain = { src0: 10, src1: 20, t0: 10, t1: 20 };
+  ok(ownsCue(10, plain) && ownsCue(19.99, plain) && !ownsCue(20, plain), "an unextended take owns exactly its own span");
+}
+
+
+group("the newest session is the newest one");
+{
+  // listSessions used to sort by path, so the first row was the highest
+  // NUMBERED lesson whatever its date. The unattended runner asked it for
+  // "the newest session" after a take and was handed an old take of lesson 5
+  // while lesson 3's fresh one sat unposted (2026-11-04).
+  const rows = [
+    { dir: "/r/Week 07/05 - Stored Procedures/2026-11-04-04-38", startedAt: 1000 },
+    { dir: "/r/Week 07/03 - Prepared Statements/2026-11-04-19-25", startedAt: 9000 },
+    { dir: "/r/Week 07/09 - LAST_INSERT_ID()/2026-11-01-10-00", startedAt: 5 },
+  ];
+  const byPath = [...rows].sort((a, b) => b.dir.localeCompare(a.dir));
+  const byTime = [...rows].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0) || b.dir.localeCompare(a.dir));
+  ok(byPath[0].dir.includes("09 - LAST"), "sorting by path puts the highest lesson number first, whatever its date");
+  ok(byTime[0].dir.includes("2026-11-04-19-25"), "sorting by startedAt puts the newest take first");
+  ok(byTime[1].dir.includes("05 - Stored"), "and the rest follow in recording order");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

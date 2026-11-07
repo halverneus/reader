@@ -57,3 +57,20 @@ export function openerTrim(word: number | undefined, fps = FPS): { src0: number;
   const src0 = Math.max(0, word - COLD_OPEN_LEAD);
   return { src0, pad: Math.round((COLD_OPEN_LEAD - (word - src0)) * fps) };
 }
+
+/** Does this cue — a spoken clip, a slide, a freeze — belong to this piece?
+ *
+ *  A piece shows more than it owns. The intro and the outro hide their cut by
+ *  letting the take underneath keep PLAYING for a second or two past its last
+ *  word, so `src1` deliberately runs past the segment's end. Sound and cues
+ *  must not follow it there: past `t1` they belong to the next take, which
+ *  will place them itself.
+ *
+ *  Reading on camera this never showed, because he stops at the Roll Intro and
+ *  leaves five seconds of silence for it. An avatar episode has no reason to
+ *  pause, so the run-on landed on top of the lesson's first line: it played a
+ *  second of "Every user-defined vari…", the intro cut it off, and then the
+ *  line started again underneath. Found in the finished W07L02, 2026-11-04. */
+export function ownsCue(t: number, p: { src0: number; src1: number; t0: number; t1: number }): boolean {
+  return t >= Math.max(p.src0, p.t0) && t < Math.min(p.src1, p.t1);
+}

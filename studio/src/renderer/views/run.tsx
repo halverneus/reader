@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { toast } from "../store";
-import { runBatch, cancelRun, preflight, watchRun, runActive, RunStep, RunOptions, DEFAULT_OPTIONS } from "../runner";
+import { runBatch, cancelRun, abortRun, preflight, watchRun, runActive, RunStep, RunOptions, DEFAULT_OPTIONS } from "../runner";
 import { parseScript, cameraPlan } from "../../shared/script";
+import { RunPreview } from "../components/run-preview";
+import { useProduction } from "../production";
 
 interface ScriptFileInfo { path: string; course: string; week: string; lesson: string; mtime: number }
 interface VmInfo { vm: { uri: string; domain: string } | null; state: string; boxes: boolean; agent: boolean }
@@ -19,6 +21,8 @@ export function RunView() {
   const [running, setRunning] = useState(runActive());
   const [vm, setVm] = useState<VmInfo | null>(null);
   const [blocked, setBlocked] = useState<string[]>([]);
+  const [preview, setPreview] = useState(true);
+  const prod = useProduction();
 
   useEffect(() => { window.studio.invoke("scripts:list").then(setAll).catch(() => {}); refreshVm(); }, []);
   // An autorun (started from the command line) drives the same runner, so the
@@ -120,7 +124,12 @@ export function RunView() {
         </table>
       )}
 
+      {preview && (running || prod.marker >= 0) && <RunPreview />}
+
       <div class="row" style="gap:16px;flex-wrap:wrap;align-items:center">
+        <label class="row" style="gap:5px;font-size:12px" title="Glitch and avatar Dev, live, in their real positions. The drivers run during a take either way; this only decides whether you can see them.">
+          <input type="checkbox" checked={preview} onChange={(e: any) => setPreview(e.currentTarget.checked)} /> show the avatars while recording
+        </label>
         {opt("stage", "load each lesson's deck in the VM", "Before each take: empty the Workbench SQL tab, then open this lesson's own Slides.html fullscreen on slide 1. Without it a batch records the next script over the last lesson's slides")}
         {opt("post", "run post after each", "Build the Kdenlive project (and render, if that is on in Settings) as soon as a take finishes")}
         {opt("reboot", "reboot the VM between lessons", "Clears the Activate Windows watermark. Needs the VM reachable over libvirt")}
@@ -151,6 +160,10 @@ export function RunView() {
         </button>
         <button class="btn" disabled={!running} onClick={() => { cancelRun(); toast("Will stop after this lesson", "info"); }}>
           Stop after this one
+        </button>
+        <button class="btn" disabled={!running} title="Abandon the take that is running now. The partial recording is kept, so it can be posted or thrown away afterwards."
+          onClick={() => { abortRun(); toast("Stopping this take now", "info"); }}>
+          Stop now
         </button>
       </div>
     </div>

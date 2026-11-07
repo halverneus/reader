@@ -5,6 +5,10 @@ import { Entry, cameraPlan, entriesAt, nextMarker, splitMoodTags, cleanText, out
 import { getState, toast } from "./store";
 import { glitch, devatar } from "./components/glitch-stage";
 
+/** The gap left at the Roll Intro when nobody is reading: long enough for the
+ *  intro to cover the cut, which is what he leaves by hand. */
+const INTRO_HOLD_MS = 5000;
+
 export interface ProdState {
   marker: number; take: number; recording: boolean; keysRunning: boolean; keysEntryId: string | null; keysStep: number;
   devPos: "home" | "left" | "hidden"; avatar: boolean; speakingId: string | null; outroPhase: number;
@@ -38,6 +42,17 @@ class Production {
   private endHooks = new Set<(reason: string) => void>();
   onEnd(f: (reason: string) => void) { this.endHooks.add(f); return () => { this.endHooks.delete(f); }; }
   private fireEnd(reason: string) { for (const f of [...this.endHooks]) { try { f(reason); } catch {} } }
+  /** Abandon the take right now: stop the voice, stop advancing, and tell
+   *  whoever is waiting that it is over. For the Stop button — without it the
+   *  only way out of a bad take was to let it run to the end or kill the app
+   *  (2026-11-05). */
+  abort(reason = "stopped") {
+    this.cancelSpeech();
+    for (const t of this.cueTimers) window.clearTimeout(t);
+    this.cueTimers = [];
+    this.set({ marker: -1 });
+    this.fireEnd(reason);
+  }
 
   /** True when nobody has to be in the room: avatar Dev reads every line and
    *  the take records the screen alone. The runner refuses anything else. */
@@ -62,8 +77,18 @@ class Production {
     return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}.${Math.floor((ms % 1000) / 100)}`;
   }
 
+  /** The last few cues, for the live preview. Kept in the renderer and NOT
+   *  pushed through set()/emit(): moods and gestures fire several times a
+   *  line, and re-rendering a view on each one is a cost the preview can pay
+   *  for itself by polling. Filled in rehearsal too, so the preview is useful
+   *  before anything is being recorded. */
+  private recent: LogEvent[] = [];
+  recentEvents(): LogEvent[] { return this.recent; }
+
   log(kind: string, data: Record<string, any> = {}) {
     const ev: LogEvent = { t: Date.now(), kind, marker: this.st.marker, take: this.st.take, ...data };
+    this.recent.push(ev);
+    if (this.recent.length > 60) this.recent.splice(0, this.recent.length - 60);
     if (this.st.recording) window.studio.invoke("session:event", ev);
   }
 
@@ -180,6 +205,15 @@ class Production {
             .then(() => { this.set({ keysRunning: false }); this.log("keys-end", { entryId: e.id }); });
           this.keysDone = p; waits.push(p);
         }
+      }
+      else if (e.type === "editor" && /roll\s*intro/i.test(e.text) && anyAuto) {
+        // Reading on camera he stops here and leaves a gap for the intro to
+        // live in; the cut is built around that silence. Nobody is reading on
+        // an avatar episode, so the script sprinted straight on and the next
+        // line began under the intro — audible as half a sentence, the intro,
+        // then the sentence again (2026-11-04). Leave the same gap he does.
+        this.log("intro-hold", { ms: INTRO_HOLD_MS });
+        waits.push(new Promise<void>((r) => this.cueTimers.push(window.setTimeout(r, INTRO_HOLD_MS))));
       }
       else if (e.type === "line") lineToSpeak = e;
       else if (e.type === "outro") waits.push(this.runOutro(e));
