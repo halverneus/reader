@@ -279,6 +279,14 @@ group("caps in Glitch's lines");
   ok(caps("It says the line item's invoice ID equals the outer invoice's ID.").length === 0, "ID stays uppercase: it is deliberate");
   ok(caps("Two is different from NULL, so nothing comes back.").length === 1, "NULL is NOT exempt; the house style is lowercase");
   ok(caps("The optimizer knows the answer.").length === 0, "ordinary prose passes");
+
+  // "ID" has house spellings both voices depend on.
+  const ids = (text: string) => errorsOf(checkText(g(text))).filter((x) => x.rule === "id");
+  ok(ids("The customer id came back empty.").length === 1, "lowercase id is an error");
+  ok(ids("The customer ID came back empty.").length === 0, "uppercase ID is the house spelling");
+  ok(ids("Why are the IDs in the middle table?").length === 1, "the plural IDs must be respelled");
+  ok(ids("Why are the eye-deez in the middle table?").length === 0, "eye-deez is the fix");
+  ok(ids("It says the line item's customer_id column.").length === 0, "a column name is not a spoken id");
   ok(caps("Wait so. Oh! OH. That is what it means.").length === 1,
      "OH is flagged: Kokoro says 'oh aitch' for it at random, so one clean render proves nothing");
 

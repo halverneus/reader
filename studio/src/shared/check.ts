@@ -340,6 +340,22 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
       err("caps", `${(e as any).actor ?? "the outro"} says ${caps.map((c) => `"${c}"`).join(", ")} in capitals; the voice spells those out. Write them quoted and lowercase, as ${caps.map((c) => `"${c.toLowerCase()}"`).join(", ")}`, e);
   }
 
+  // ── "ID" is the one word that is DELIBERATELY spelled out, and it has house
+  // spellings both voices depend on. Singular is always "ID": lowercase "id"
+  // reads as the word "id" (as in ego) instead of the two letters. Plural is
+  // written "eye-deez", because "IDs" comes out "eye-dee-ess". Jeromy found
+  // five lowercase ones in Week 08 Lesson 6 on 2026-11-07, all mine from the
+  // original authoring pass; nothing was catching them.
+  for (const { text: raw, e } of spoken) {
+    const text = cleanText(raw);
+    const who = (e as any).actor ?? "the outro";
+    if (/\b(?:id|Id)\b/.test(text))
+      err("id", `${who} says "id" in lowercase; it is read as a word. Write it "ID"`, e);
+    const plural = text.match(/\b(?:IDs|Ids|ids|IDS)\b/);
+    if (plural)
+      err("id", `${who} says "${plural[0]}"; the plural is spoken "eye-deez" and has to be written that way`, e);
+  }
+
   // ── the avatar swap
   // A swap only means anything if something swaps back, and the "glitch" mood
   // it wears is applied by the renderer, not by the author, so a hand-written
