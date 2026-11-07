@@ -330,6 +330,7 @@ group("caps in Glitch's lines");
      "quoted and lowercase is the fix for Dev too");
   ok(avatarCaps("The invoice ID is the key.").length === 0,
      "ID stays exempt for Dev as well");
+
 }
 
 // ── marker diff (what the live GUI update highlights) ───────────────────────

@@ -206,12 +206,18 @@ kbd{font-family:var(--mono);font-size:10px;color:var(--dim);margin-left:6px}
 /* ── live avatar preview on the Run tab ─────────────────────────────────────
    The stage is the same component the Record tab uses, so a gesture or a mood
    can be checked while the take runs instead of after the render. */
+/* flex:none, because the Run tab is a flex column: without it a longer line
+   of dialogue steals height from the stage and the avatars visibly resize
+   between markers. */
 .run-preview{display:grid;grid-template-columns:minmax(0,1fr) 230px;gap:12px;
-  border:1px solid var(--line);border-radius:6px;padding:10px;background:#0e111a}
+  flex:none;border:1px solid var(--line);border-radius:6px;padding:10px;
+  background:#0e111a}
 .run-preview .stage{border-radius:4px;border:1px solid var(--line);border-bottom:1px solid var(--line)}
 .rp-bar{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:12px}
+/* a FIXED height, not a max: the line changes on every marker and the stage
+   must not move when it does. */
 .rp-line{margin-top:6px;font-size:13px;line-height:1.5;color:var(--ink);
-  max-height:3.1em;overflow:hidden}
+  height:3em;overflow:hidden}
 .rp-line b{color:var(--accent,#3fc9c0);margin-right:6px}
 .rp-tail{overflow-y:auto;max-height:260px;display:flex;flex-direction:column;gap:3px;
   font-size:11px;font-family:var(--mono);padding-right:4px}
