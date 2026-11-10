@@ -510,9 +510,26 @@ export function checkScript(s: Script, opts: CheckOptions = {}): Finding[] {
   // typed character in that lesson read as typing into the slides.
   let focus: "deck" | "app" = "deck";
   for (const e of [...s.entries].filter((x) => x.type === "keys").sort((a, b) => a.start - b.start)) {
+    // k:f2 opens the browser's quick command bar as an overlay over the deck
+    // and that overlay takes typing. It lasts as long as the entry it is in,
+    // because the aside that opens it also closes it (2026-11-10).
+    let overlay = false;
     for (const tok of (e as any).keystrokes as string[]) {
+      if (tok === "k:f2") { overlay = true; continue; }
+      if (overlay && tok.startsWith("t:")) continue;
       if (tok === "k:alt+tab") focus = focus === "deck" ? "app" : "deck";
       else if (tok === "k:super") focus = "app";
+      // Win+N addresses a taskbar slot directly instead of toggling, which is
+      // the only thing that works once a third window is open: alt+tab then
+      // lands on whichever of the three was used last. Slot 2 is the browser
+      // holding the deck, every other pinned slot is another application
+      // (1 File Explorer, 3 Workbench, 4 Notepad). 2026-11-10.
+      else if (tok === "k:meta+2") focus = "deck";
+      else if (/^k:meta\+[1345-9]$/.test(tok)) focus = "app";
+      // A bare k:meta (Start menu) and k:f2 (the browser's quick command bar)
+      // both open something OVER the window that has focus and hand it back
+      // on k:escape, so neither moves this model. Verified in the recording VM
+      // 2026-11-10: after k:meta / k:escape the deck answers arrow keys again.
       else if (tok === "k:right" && focus !== "deck") err("focus", "k:right while another window has focus", e);
       else if ((tok.startsWith("t:") || tok.startsWith("m:move 1800")) && focus !== "app") err("focus", "typing or Run while the deck has focus", e);
     }

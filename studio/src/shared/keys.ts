@@ -46,6 +46,21 @@ export const KEY_VOCABULARY: KeyFact[] = [
   { key: "ctrl+shift+l", status: "verified", note: "Terminal.ClearBuffer in Windows Terminal, bound by hand in its settings.json. Clears the screen AND the scrollback so each statement's output is framed the same way. Not a default binding: if settings.json is ever reset this key does nothing and the demo merely scrolls. Observed in the recording VM 2026-10-28." },
   { key: "f7", status: "verified", note: "Navigation, per the recording rules." },
   { key: "f11", status: "verified", note: "Browser fullscreen for the deck." },
+  { key: "f2", status: "verified", note: "Vivaldi's quick command bar. It opens as an overlay ON TOP of the fullscreen deck, so unlike ctrl+t it costs no fullscreen and shows no browser chrome: the one safe way to put a browser on camera. Typing a host address offers a \"Go to Address\" row. Needs TWO escapes (the first only clears the typed text) and then a click on the page, because the focus comes back to the browser chrome rather than the document. Verified in the recording VM 2026-11-10." },
+  { key: "meta", status: "verified", note: "The Windows Start menu, drawn over the fullscreen deck. The account on it is named Glitch, so it reveals nothing of Jeromy's. k:escape closes it and the window underneath answers keys again with no click. Verified in the recording VM 2026-11-10." },
+  // Week 09 onward: Glitch reaches programs beyond the deck and Workbench, so
+  // a script has to address a specific window rather than toggle between two.
+  // Win+N activates a taskbar slot. All four are PINNED on the recording VM so
+  // the numbers are stable across reboots, and Win+4 launches Notepad when it
+  // is not already running. Observed in the recording VM 2026-11-09.
+  //
+  // It TOGGLES: sending Win+N for the window that already has focus minimises
+  // it. And raising a window does not give it keyboard focus, so a click into
+  // the target must follow before any typing.
+  { key: "meta+1", status: "verified", note: "Taskbar slot 1, File Explorer. Pinned. Verified in the recording VM 2026-11-09." },
+  { key: "meta+2", status: "verified", note: "Taskbar slot 2, the browser holding the deck. Pinned. Verified 2026-11-09." },
+  { key: "meta+3", status: "verified", note: "Taskbar slot 3, MySQL Workbench. Pinned. Verified 2026-11-09." },
+  { key: "meta+4", status: "verified", note: "Taskbar slot 4, Notepad. Pinned, and this LAUNCHES it when it is not running. Verified 2026-11-09. Raising is not focusing: click into the text area before typing." },
 ];
 
 const BY_KEY = new Map(KEY_VOCABULARY.map((k) => [k.key, k]));
