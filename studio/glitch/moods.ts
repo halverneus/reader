@@ -56,6 +56,7 @@ export const MOODS: Record<string, MoodDef> = {
   unimpressed: { label: "Unimpressed", quote: "\u201cI saw it.\u201d",             group: "low",      expr: { color: "#6f8f96", lidT: .5, browY: -.05, pupil: .95, mouthCurve: -.02, mouthW: .45, fin: -.2, bob: .55, glow: .85, reach: .05, lift: -.1 } },
   cringe:    { label: "Cringe",    quote: "\u201cOh no. Oh, no no.\u201d",            group: "low",      expr: { color: "#c8a06a", lidT: .7, asym: .85, browY: .25, browA: -.2, pupil: .85, lookX: -.4, lookY: .15, mouthCurve: -.55, mouthW: 1.3, mouthOpen: .22, squint: .35, tilt: -.5, fin: -.85, shake: .2, glow: .8, reach: 0, lift: .25 } },
   sleepy:    { label: "Sleepy",    quote: "“…zzz. I'm listening.”",     group: "low",      expr: { color: "#4f7f9a", lidT: .8, browY: -.1, mouthCurve: .05, mouthW: .4, mouthOpen: .1, tilt: .5, fin: -.7, bob: .3, glow: .5, reach: .1, lift: -.8 } },
+  asleep:    { label: "Asleep",    quote: "“…”",                         group: "low",      expr: { color: "#3c6a84", lidT: 1, lidB: .25, browY: -.35, browA: -.15, pupil: .9, mouthCurve: .08, mouthW: .35, mouthOpen: .05, tilt: .65, fin: -1, bob: .15, glow: .28, reach: 0, lift: -1 } },
   glitch:    { label: "Glitch",    quote: "“I'm f-f-fine.”",            group: "misc",     expr: { color: "#e85a6a", glitch: 1, shake: .8, lidT: .2, asym: .8, mouthCurve: .2, mouthW: .9, mouthOpen: .3, glow: 1.6, fin: .4 } },
 };
 

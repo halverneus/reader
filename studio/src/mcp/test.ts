@@ -673,6 +673,15 @@ group("the new expressions, and spending them");
   ok(e("cringe").asym > .5 && e("cringe").tilt < 0, "half the face shuts and the head pulls away");
   ok(e("cringe").lift > 0 && e("hurt").lift < 0, "cringe braces; hurt droops. One watches, the other was hit");
 
+  // asleep was carved out of sleepy for the end of the last lesson, where
+  // Dev tells him to take a nap. It has to read as the end of a scene rather
+  // than as "sleepy, but more", or the beat does not land.
+  ok(MOOD_NAMES.includes("asleep"), "asleep is in the library");
+  ok(e("asleep").lidT >= 1 && e("sleepy").lidT < 1, "asleep has the eyes shut; sleepy is only heavy-lidded");
+  ok(e("asleep").glow < e("sleepy").glow, "and he has gone dark with them");
+  ok(e("asleep").bob < e("sleepy").bob, "the idle bob almost stops: breathing, not listening");
+  ok(e("asleep").lift < e("sleepy").lift && e("asleep").reach === 0, "the arms are all the way down and he is not reaching for anything");
+
   const face = (mood: string, hold: number | null) => `script:
 - type: "editor"
   start: 100
